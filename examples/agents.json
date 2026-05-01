@@ -1,0 +1,16 @@
+{
+  "agents": [
+    {
+      "name": "claude",
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "headless_mode": "claude_stream_json"
+    },
+    {
+      "name": "codex",
+      "command": "codex",
+      "args": ["--yolo"],
+      "headless_mode": "codex_exec"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+*.log
+.DS_Store
+~/.helm/
+packages/web/.next/
+packages/web/out/
+test-results/
+playwright-report/
+tests/fixtures/helm-home/logs/
+tests/fixtures/helm-home/state/
+tests/fixtures/helm-home/worktrees/

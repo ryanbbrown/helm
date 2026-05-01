@@ -1,0 +1,34 @@
+import { $ } from "bun";
+
+/** Checks whether a path is a git work tree. */
+export async function isGitRepository(path: string): Promise<boolean> {
+  const result = await $`git -C ${path} rev-parse --is-inside-work-tree`.quiet().nothrow();
+  return result.exitCode === 0 && result.stdout.toString().trim() === "true";
+}
+
+/** Fetches origin for a repository without changing the current checkout. */
+export async function fetchOrigin(repoPath: string): Promise<void> {
+  await $`git -C ${repoPath} fetch origin`.quiet();
+}
+
+/** Detects the default remote branch name for a repository. */
+export async function detectDefaultBranch(repoPath: string): Promise<string> {
+  const result = await $`git -C ${repoPath} symbolic-ref --short refs/remotes/origin/HEAD`.quiet();
+  return result.stdout.toString().trim().replace(/^origin\//, "");
+}
+
+/** Creates a named branch worktree from the remote default branch. */
+export async function createWorktree(repoPath: string, branch: string, path: string, defaultBranch: string): Promise<void> {
+  await $`git -C ${repoPath} worktree add -b ${branch} ${path} ${`origin/${defaultBranch}`}`.quiet();
+}
+
+/** Removes a worktree forcefully from its owning repository. */
+export async function removeWorktree(repoPath: string, path: string): Promise<void> {
+  await $`git -C ${repoPath} worktree remove --force ${path}`.quiet();
+  await $`git -C ${repoPath} worktree prune`.quiet();
+}
+
+/** Deletes a local branch if it exists. */
+export async function deleteBranch(repoPath: string, branch: string): Promise<void> {
+  await $`git -C ${repoPath} branch -D ${branch}`.quiet().nothrow();
+}

@@ -1,0 +1,9 @@
+[submodule "references/code-conductor"]
+	path = references/code-conductor
+	url = https://github.com/ryanmac/code-conductor.git
+[submodule "references/conductor-oss"]
+	path = references/conductor-oss
+	url = https://github.com/charannyk06/conductor-oss.git
+[submodule "references/symphony"]
+	path = references/symphony
+	url = https://github.com/openai/symphony.git

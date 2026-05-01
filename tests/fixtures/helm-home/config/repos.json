@@ -1,0 +1,14 @@
+{
+  "repos": [
+    {
+      "name": "test-repo-1",
+      "path": "/Users/ryanbrown/code/test-repo-1",
+      "default_branch": "main"
+    },
+    {
+      "name": "test-repo-2",
+      "path": "/Users/ryanbrown/code/test-repo-2",
+      "default_branch": "main"
+    }
+  ]
+}

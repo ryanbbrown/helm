@@ -1,0 +1,27 @@
+{
+  "name": "helm",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "check": "bun run --filter '*' check",
+    "test": "bun test ./packages/core ./packages/daemon ./packages/cli ./packages/web && bun run test:e2e",
+    "test:unit": "bun test ./packages/core ./packages/daemon ./packages/cli ./packages/web",
+    "test:e2e": "playwright test",
+    "test:agents": "HELM_REAL_AGENT_E2E=1 playwright test tests/e2e/real-agents.spec.ts --workers=1",
+    "test:agents:clean": "HELM_REAL_AGENT_E2E=1 HELM_E2E_CLEANUP=1 playwright test tests/e2e/real-agents.spec.ts --workers=1",
+    "web": "bun run --cwd packages/web dev"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/bun": "^1.3.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "commander": "^14.0.2",
+    "ulid": "^3.0.1",
+    "zod": "^4.1.12"
+  }
+}

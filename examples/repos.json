@@ -1,0 +1,9 @@
+{
+  "repos": [
+    {
+      "name": "helm",
+      "path": "/Users/ryanbrown/code/helm",
+      "default_branch": "main"
+    }
+  ]
+}

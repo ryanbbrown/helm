@@ -1,0 +1,23 @@
+{
+  "name": "@helm/daemon",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "server": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@helm/core": "workspace:*",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.2",
+    "typescript": "^5.9.3"
+  }
+}
