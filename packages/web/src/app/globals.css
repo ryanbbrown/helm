@@ -206,6 +206,11 @@ textarea {
   color: var(--ok);
 }
 
+.badge.stopped {
+  border-color: #b8beb5;
+  color: var(--muted);
+}
+
 .detail {
   display: grid;
   grid-template-rows: 56px minmax(0, 1fr) auto;

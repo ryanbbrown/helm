@@ -35,5 +35,9 @@ function parseLine(line: string, onValue: JsonLineHandler): void {
   if (trimmed.length === 0) {
     return;
   }
-  onValue(JSON.parse(trimmed));
+  try {
+    onValue(JSON.parse(trimmed));
+  } catch {
+    console.warn(`helm: skipped non-JSON agent output: ${trimmed.slice(0, 200)}`);
+  }
 }

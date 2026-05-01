@@ -39,6 +39,11 @@ export function databasePath(): string {
   return join(stateDir(), "helm.db");
 }
 
+/** Returns the daemon auth token path. */
+export function tokenPath(): string {
+  return join(stateDir(), "token");
+}
+
 /** Returns the raw JSONL log path for a session. */
 export function logPath(sessionId: string): string {
   return join(logsDir(), `${sessionId}.jsonl`);

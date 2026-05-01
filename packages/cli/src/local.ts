@@ -8,12 +8,12 @@ export function createLocalManager(): SessionManager {
 
 /** Streams events for a local session manager. */
 export async function* streamLocalEvents(manager: SessionManager, sessionId: string): AsyncIterable<SessionEvent> {
-  for (const event of manager.store.listEvents(sessionId)) {
+  for (const event of manager.listEvents(sessionId)) {
     yield event;
   }
   const queue: SessionEvent[] = [];
   let resolve: (() => void) | null = null;
-  const unsubscribe = manager.bus.subscribe((event) => {
+  const unsubscribe = manager.subscribe((event) => {
     if (event.type === "event" && event.event.session_id === sessionId) {
       queue.push(event.event);
       resolve?.();

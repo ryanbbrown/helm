@@ -1,12 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { createId, logPath, worktreePath, type NormalizedEvent, type Session } from "@helm/core";
+import { createId, logPath, worktreePath, type NormalizedEvent, type Session, type SessionEvent } from "@helm/core";
 import { findAgent, findRepo, loadConfig, type HelmConfig } from "./config-loader";
-import { deleteBranch, fetchOrigin, createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from "./git";
+import { deleteBranch, fetchOrigin, createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree, unsharedCommits, worktreeStatus } from "./git";
 import { Store } from "./store";
 import { createRunnerAdapter } from "./runner";
 import type { RunnerHandle } from "./runner/types";
-import { EventBus } from "./event-bus";
+import { EventBus, type BusEvent } from "./event-bus";
 
 export type SessionManagerOptions = {
   config?: HelmConfig;
@@ -21,9 +21,28 @@ export type CreateSessionInput = {
   prompt?: string;
 };
 
+export type PublicHelmConfig = {
+  repos: Array<{ name: string }>;
+  agents: Array<{ name: string; headless_mode: HelmConfig["agents"][number]["headless_mode"] }>;
+};
+
+export type ArchiveOptions = {
+  force?: boolean;
+};
+
+export class ArchiveSafetyError extends Error {
+  /** Creates an archive safety error. */
+  constructor(
+    readonly code: "dirty_worktree" | "unshared_commits",
+    readonly details: string
+  ) {
+    super(code);
+  }
+}
+
 export class SessionManager {
-  readonly store: Store;
-  readonly bus: EventBus;
+  private store: Store;
+  private bus: EventBus;
   private handles = new Map<string, RunnerHandle>();
   private cachedConfig?: HelmConfig;
   private configDir?: string;
@@ -94,6 +113,15 @@ export class SessionManager {
     return this.loadHelmConfig();
   }
 
+  /** Returns dashboard-safe config without filesystem paths or commands. */
+  async getPublicConfig(): Promise<PublicHelmConfig> {
+    const config = await this.loadHelmConfig();
+    return {
+      repos: config.repos.map((repo) => ({ name: repo.name })),
+      agents: config.agents.map((agent) => ({ name: agent.name, headless_mode: agent.headless_mode }))
+    };
+  }
+
   /** Sends a follow-up message to a running in-memory session. */
   async send(id: string, text: string): Promise<Session> {
     const handle = this.handles.get(id);
@@ -116,14 +144,14 @@ export class SessionManager {
     return session;
   }
 
-  /** Stops a running session and marks it archived. */
+  /** Stops a running session and keeps it visible. */
   async stop(id: string): Promise<Session> {
     const handle = this.handles.get(id);
     if (handle) {
       await handle.stop();
       this.handles.delete(id);
     }
-    this.patch(id, { status: "archived", pid: null });
+    this.patch(id, { status: "stopped", pid: null });
     const session = this.get(id);
     if (!session) {
       throw new Error(`Unknown session: ${id}`);
@@ -132,10 +160,13 @@ export class SessionManager {
   }
 
   /** Archives a session and removes its worktree and local branch. */
-  async archive(id: string): Promise<Session> {
+  async archive(id: string, options: ArchiveOptions = {}): Promise<Session> {
     const config = await this.loadHelmConfig();
     const session = this.getRequired(id);
     const repo = findRepo(config, session.repo_name);
+    if (!options.force) {
+      await this.assertArchiveSafe(repo.path, session);
+    }
     const handle = this.handles.get(id);
     if (handle) {
       await handle.stop();
@@ -150,6 +181,21 @@ export class SessionManager {
   /** Lists sessions. */
   list(includeArchived = false): Session[] {
     return this.store.listSessions(includeArchived);
+  }
+
+  /** Lists persisted events for one session. */
+  listEvents(sessionId: string, afterId = 0): SessionEvent[] {
+    return this.store.listEvents(sessionId, afterId);
+  }
+
+  /** Lists persisted events across all sessions. */
+  listAllEvents(afterId = 0): SessionEvent[] {
+    return this.store.listAllEvents(afterId);
+  }
+
+  /** Subscribes to manager-level session and event updates. */
+  subscribe(listener: (event: BusEvent) => void): () => void {
+    return this.bus.subscribe(listener);
   }
 
   /** Reads a session. */
@@ -175,7 +221,7 @@ export class SessionManager {
       } else if (event.kind === "thinking") {
         this.patch(id, { status: "running" });
       } else if (event.kind === "turn_complete") {
-        this.patch(id, { status: "awaiting_input", pid: null });
+        this.patch(id, { status: "awaiting_input" });
       } else if (event.kind === "error") {
         this.patch(id, { status: "failed", pid: null });
       } else if (event.kind === "exit") {
@@ -219,5 +265,17 @@ export class SessionManager {
   private async loadHelmConfig(): Promise<HelmConfig> {
     this.cachedConfig ??= await loadConfig(this.configDir);
     return this.cachedConfig;
+  }
+
+  /** Refuses destructive archive when work could be lost. */
+  private async assertArchiveSafe(repoPath: string, session: Session): Promise<void> {
+    const dirty = await worktreeStatus(session.worktree_path);
+    if (dirty) {
+      throw new ArchiveSafetyError("dirty_worktree", dirty);
+    }
+    const commits = await unsharedCommits(repoPath, session.branch);
+    if (commits) {
+      throw new ArchiveSafetyError("unshared_commits", commits);
+    }
   }
 }

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { NormalizedEvent, Session, SessionEvent } from "@helm/core";
+import { e2eAuthHeaders, readE2eToken } from "./auth";
 
 const cases = [
   { repo: "test-repo-1", agent: "codex" },
@@ -27,7 +28,7 @@ for (const entry of cases) {
     });
 
     try {
-      await page.goto("/");
+      await page.goto(`/?token=${await readE2eToken()}`);
       await page.locator('select[name="repo"]').selectOption(entry.repo);
       await page.locator('select[name="agent"]').selectOption(entry.agent);
       await page.locator('textarea[name="prompt"]').fill(initialPrompt);
@@ -92,7 +93,7 @@ async function waitForFile(session: Session, fileName: string, timeoutMs: number
 
 /** Reads a session and all persisted events from the test daemon. */
 async function readSessionDetail(id: string): Promise<{ session: Session; events: SessionEvent[] }> {
-  const response = await fetch(`${apiUrl()}/sessions/${id}`);
+  const response = await fetch(`${apiUrl()}/sessions/${id}`, { headers: await e2eAuthHeaders() });
   return (await response.json()) as { session: Session; events: SessionEvent[] };
 }
 
@@ -110,7 +111,8 @@ async function countAssistantMessages(id: string): Promise<number> {
 
 /** Archives a test-created session. */
 async function archiveSession(id: string): Promise<void> {
-  await fetch(`${apiUrl()}/sessions/${id}/archive`, {
+  await fetch(`${apiUrl()}/sessions/${id}/archive?force=1`, {
+    headers: await e2eAuthHeaders(),
     method: "POST"
   });
 }

@@ -17,7 +17,7 @@ export function SessionDetail({ session, events, onRefresh, onSend, onStop }: Se
     <div className="detail">
       <Header session={session} onRefresh={onRefresh} onStop={onStop} />
       <MessageTimeline events={events} />
-      <Composer disabled={session.status === "archived" || session.status === "failed"} onSend={onSend} />
+      <Composer disabled={["archived", "failed", "stopped"].includes(session.status)} onSend={onSend} />
     </div>
   );
 }

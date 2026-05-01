@@ -38,6 +38,7 @@ class ClaudeRunnerHandle implements RunnerHandle {
   events: AsyncIterable<NormalizedEvent>;
   pid: number;
   private emittedAssistantThisTurn = false;
+  private emittedThinkingThisTurn = false;
 
   /** Creates a Claude runner handle. */
   constructor(
@@ -78,11 +79,13 @@ class ClaudeRunnerHandle implements RunnerHandle {
     }
     if (event.type === "assistant") {
       const text = extractClaudeAssistantText(value).trim();
+      if (!this.emittedThinkingThisTurn) {
+        this.queue.push({ kind: "thinking" });
+        this.emittedThinkingThisTurn = true;
+      }
       if (text) {
         this.queue.push({ kind: "assistant_message", text });
         this.emittedAssistantThisTurn = true;
-      } else if (!this.emittedAssistantThisTurn) {
-        this.queue.push({ kind: "thinking" });
       }
       return;
     }
@@ -93,6 +96,7 @@ class ClaudeRunnerHandle implements RunnerHandle {
       }
       this.queue.push({ kind: "turn_complete" });
       this.emittedAssistantThisTurn = false;
+      this.emittedThinkingThisTurn = false;
     }
   }
 }

@@ -6,6 +6,7 @@ export type SessionStatus =
   | "awaiting_input"
   | "completed"
   | "failed"
+  | "stopped"
   | "archived";
 
 export type Session = {

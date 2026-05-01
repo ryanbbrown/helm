@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { tokenPath } from "@helm/core";
 import type { Session, SessionEvent } from "@helm/core";
 
 const DEFAULT_BASE_URL = `http://127.0.0.1:${Bun.env.HELM_PORT ?? "7878"}`;
@@ -43,13 +45,15 @@ export class DaemonClient {
   }
 
   /** Archives a daemon session. */
-  async archive(id: string): Promise<Session> {
-    return this.request(`/sessions/${id}/archive`, { method: "POST" });
+  async archive(id: string, force = false): Promise<Session> {
+    return this.request(`/sessions/${id}/archive${force ? "?force=1" : ""}`, { method: "POST" });
   }
 
   /** Streams session events through SSE. */
   async *streamEvents(id: string): AsyncIterable<SessionEvent> {
-    const response = await fetch(`${this.baseUrl}/sessions/${id}/events`);
+    const response = await fetch(`${this.baseUrl}/sessions/${id}/events`, {
+      headers: this.authHeaders()
+    });
     if (!response.ok || !response.body) {
       throw new Error(`Failed to stream events for ${id}`);
     }
@@ -66,14 +70,22 @@ export class DaemonClient {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...this.authHeaders(),
         ...init.headers
       }
     });
-    const value = await response.json();
+    const value = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) {
       throw new Error(value.error ?? `HTTP ${response.status}`);
     }
     return value as T;
+  }
+
+  /** Returns daemon auth headers for protected endpoints. */
+  private authHeaders(): HeadersInit {
+    return {
+      Authorization: `Bearer ${readFileSync(tokenPath(), "utf8").trim()}`
+    };
   }
 }
 

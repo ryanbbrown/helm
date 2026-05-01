@@ -3,8 +3,6 @@ export type SessionEventKind =
   | "user_message"
   | "thinking"
   | "assistant_message"
-  | "tool_use"
-  | "tool_result"
   | "turn_complete"
   | "error"
   | "exit";
@@ -32,17 +30,6 @@ export type AssistantMessageEvent = {
   text: string;
 };
 
-export type ToolUseEvent = {
-  kind: "tool_use";
-  name?: string;
-  payload: unknown;
-};
-
-export type ToolResultEvent = {
-  kind: "tool_result";
-  payload: unknown;
-};
-
 export type TurnCompleteEvent = {
   kind: "turn_complete";
 };
@@ -63,8 +50,6 @@ export type NormalizedEvent =
   | UserMessageEvent
   | ThinkingEvent
   | AssistantMessageEvent
-  | ToolUseEvent
-  | ToolResultEvent
   | TurnCompleteEvent
   | ErrorEvent
   | ExitEvent;

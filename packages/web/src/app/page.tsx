@@ -2,8 +2,8 @@
 
 import { Archive, Play } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentConfig, RepoConfig, Session, SessionEvent } from "@helm/core";
-import { archiveSession, createSession, getConfig, getSession, listSessions, sendMessage, stopSession } from "../lib/api";
+import type { Session, SessionEvent } from "@helm/core";
+import { ApiError, archiveSession, createSession, getConfig, getSession, listSessions, sendMessage, stopSession, type HelmConfig } from "../lib/api";
 import { useAllSessionsStream, useSessionEvents } from "../lib/sse";
 import { EmptyState } from "../components/EmptyState";
 import { Header } from "../components/Header";
@@ -15,8 +15,8 @@ export default function Page() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [repos, setRepos] = useState<RepoConfig[]>([]);
-  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [repos, setRepos] = useState<HelmConfig["repos"]>([]);
+  const [agents, setAgents] = useState<HelmConfig["agents"]>([]);
   const [repoName, setRepoName] = useState("");
   const [agentName, setAgentName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -127,8 +127,17 @@ export default function Page() {
     if (!selectedId) {
       return;
     }
-    const session = await archiveSession(selectedId);
-    mergeSession(session);
+    try {
+      const session = await archiveSession(selectedId);
+      mergeSession(session);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409 && window.confirm(`Archive would discard work:\n\n${cause.details}\n\nForce archive?`)) {
+        const session = await archiveSession(selectedId, true);
+        mergeSession(session);
+        return;
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   return (

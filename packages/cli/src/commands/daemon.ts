@@ -1,11 +1,14 @@
 import { DaemonClient } from "../client";
 import { startServer } from "@helm/daemon/server";
+import { createDaemonToken } from "@helm/daemon/auth";
 
 /** Starts the daemon in the foreground. */
 export function startDaemon(): void {
   const port = Number(Bun.env.HELM_PORT ?? "7878");
-  const server = startServer(port);
+  const token = createDaemonToken();
+  const server = startServer(port, token);
   console.log(`helm daemon listening on http://${server.hostname}:${server.port}`);
+  console.log(`helm dashboard URL: http://localhost:3000/?token=${token}`);
 }
 
 /** Prints daemon health. */

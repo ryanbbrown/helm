@@ -38,18 +38,48 @@ This contradicts spec §5.2 and §6.2-6.4 which treat `stop` as ending execution
 
 This is a small, mechanical refactor (~30 lines of moves) but it locks in a clean boundary before more endpoints get added.
 
-### 1.3 Lock down CORS to the dashboard origin
+### 1.3 Authenticate the daemon and remove wildcard CORS
 
-**File:** `packages/daemon/src/server.ts:83-89`.
+**File:** `packages/daemon/src/server.ts:83-89` (CORS), `packages/daemon/src/server.ts:7-21` (request router has no auth at all).
 
-**Problem:** `Access-Control-Allow-Origin: *` lets any origin loaded in the user's browser issue requests to the daemon (which binds to `127.0.0.1:7878`). Combined with no auth, a malicious tab can create/stop/archive sessions. DNS-rebinding attacks against localhost services are a real class of vulnerability.
+**Problem:** This is the most serious issue in the codebase. The daemon is a **local code-execution control plane** — it can spawn arbitrary configured agents (`claude --dangerously-skip-permissions`, `codex --yolo`) inside the user's repos. The router has no authentication, and `Access-Control-Allow-Origin: *` is set on every response. Because the daemon binds to `127.0.0.1:7878`, network attackers can't reach it — but **any webpage open in the user's browser can**. Any tab the user visits can:
+- `POST /sessions` to start a coding agent against any configured repo with any prompt.
+- Read `/config` to enumerate repos and agents (and absolute filesystem paths — see 1.4).
+- Stream `/sessions/:id/events` to read agent output.
+- `POST /sessions/:id/stop` and `/archive` to tamper with running work (and 1.5 makes archive destructive).
+
+Loopback binding does not protect against this: browsers happily make CORS requests to `localhost:7878`, and the wildcard explicitly allows them. This is functionally equivalent to a remote code execution surface for any malicious or compromised webpage.
 
 **Fix:**
-- Default `Access-Control-Allow-Origin` to `http://localhost:3000` (the Next.js dev origin). Make it configurable via env var (e.g. `HELM_ALLOWED_ORIGIN`) for future Tauri / packaged dashboard origins.
-- Validate the request `Origin` header against the allowlist; reject unknown origins.
-- Keep `Access-Control-Allow-Methods` and `Access-Control-Allow-Headers` as-is.
+- Generate a per-daemon-startup secret token (e.g. 32 random bytes hex). Store it at `~/.helm/state/token` with `0600` perms.
+- Require the token on every endpoint except `/health`. Accept it via `Authorization: Bearer <token>` header **or** a `?token=<token>` query string (needed for `EventSource` SSE which can't set headers).
+- The dashboard reads the token from a daemon-served bootstrap that requires same-origin only (or, simpler: have `helm daemon start` print the dashboard URL with `?token=...` already embedded, and have the Next.js app read it from `window.location` on first load and stash in memory).
+- Replace `Access-Control-Allow-Origin: *` with an explicit allowlist (default `http://localhost:3000`, configurable via env). Reject requests whose `Origin` is not on the allowlist.
+- The CLI's `DaemonClient` reads the token from `~/.helm/state/token` and includes it on every request.
+- `OPTIONS` preflight: respond with allowlisted methods/headers; do not echo arbitrary `Origin` back.
 
-### 1.4 Stop sending absolute filesystem paths to the browser
+This is more involved than just changing the CORS header, but the daemon's blast radius makes a token mandatory before anything ships.
+
+### 1.4 Make `archive` non-destructive by default
+
+**Files:** `packages/daemon/src/git.ts:25-33` (`removeWorktree` and `deleteBranch`), `packages/daemon/src/session-manager.ts:135-148` (`archive`), `packages/web/src/app/page.tsx` (the archive button has no confirm dialog).
+
+**Problem:** `archive()` calls `git worktree remove --force` followed by `git branch -D`. There is **no check for**:
+- Uncommitted/unstaged changes in the worktree (`git status --porcelain`).
+- Commits on the session's branch that are not reachable from any other branch (i.e. would be lost on `branch -D`).
+- Whether the branch has been pushed upstream.
+
+In this product the worktree contents *are* the agent's output — the entire reason to use Helm. A normal "archive" click on a session whose work hasn't been merged or pushed permanently destroys that work, with no recovery path. The dashboard archive button has no confirmation dialog, so this is a single-click data-loss surface.
+
+**Fix:**
+- Before destructive operations in `archive()`, run safety checks:
+  - `git -C <worktree> status --porcelain` → if non-empty, refuse without explicit `force: true`.
+  - `git -C <repo> log <branch> --not --branches --not --remotes --oneline` → if any commits are unreachable from other refs, refuse without explicit `force: true`.
+- Extend the `archive(id)` API to accept `{ force?: boolean }`. The daemon route accepts `?force=1`. The CLI grows `helm session archive <id> --force`. The dashboard prompts when the safety check fails and only sets `force=true` after a confirm dialog that names what will be lost.
+- Default UI affordance: the archive button issues `archive(id)` without force; if the daemon rejects with a structured `409 dirty_worktree` / `409 unpushed_commits` response, the UI shows a confirm dialog with the specifics.
+- Tests: add cases for dirty-worktree and unpushed-commit refusal, and for force-archive removing them only when explicitly requested.
+
+### 1.5 Stop sending absolute filesystem paths to the browser
 
 **Files:** `packages/daemon/src/server.ts:34-36`, `packages/daemon/src/session-manager.ts:93-95` (`getConfig`), `packages/web/src/lib/api.ts:10-18`, `packages/web/src/app/page.tsx:48-51`.
 
@@ -229,7 +259,10 @@ Required:
   - Create with an initial prompt, see assistant message stream.
   - Send a follow-up, see second assistant message.
   - Stop → status = `stopped`, session still visible in list.
-  - Archive → status = `archived`, worktree gone, session hidden.
+  - Archive on a clean session → status = `archived`, worktree gone, session hidden.
+  - Archive on a dirty worktree → daemon refuses without `--force`; with `--force` (and confirm dialog), it proceeds.
+  - Archive on a branch with unpushed commits → daemon refuses without `--force`.
+- Confirm a request to the daemon from a non-allowlisted origin (e.g. `curl -H "Origin: https://evil.example" http://127.0.0.1:7878/sessions`) is rejected, and a request without the auth token is rejected.
 - Open dashboard in two tabs simultaneously, confirm both receive live updates and no events are missed during reconnect.
 
 Optional but recommended:
@@ -238,6 +271,6 @@ Optional but recommended:
 ## Notes for the implementer
 
 - Several fixes touch `SessionManager`'s public surface (1.2) and the events union (2.6). Land 1.2 first so subsequent changes are made against the encapsulated API.
-- Order suggestion: 1.2 → 1.1 → 1.3 → 1.4 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6.
+- Order suggestion: 1.3 → 1.4 → 1.2 → 1.1 → 1.5 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6. Auth and archive-safety go first because they're the two highest-severity issues (data loss + open-to-the-browser RCE-equivalent surface).
 - Each fix should be a separate commit with a conventional-commit message (e.g. `fix(daemon): split stop and archive statuses`, `refactor(daemon): encapsulate store and bus inside SessionManager`).
 - Do not introduce new dependencies or new files unless strictly necessary; all fixes can be made within existing files.

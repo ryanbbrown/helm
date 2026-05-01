@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readE2eToken } from "./auth";
 
 test("dashboard loads configured repos and agents without browser errors", async ({ page }) => {
   const messages: string[] = [];
@@ -9,7 +10,7 @@ test("dashboard loads configured repos and agents without browser errors", async
   });
   page.on("pageerror", (error) => messages.push(error.message));
 
-  await page.goto("/");
+  await page.goto(`/?token=${await readE2eToken()}`);
 
   await expect(page.locator('select[name="repo"]')).toContainText("test-repo-1");
   await expect(page.locator('select[name="repo"]')).toContainText("test-repo-2");

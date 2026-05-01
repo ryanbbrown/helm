@@ -16,7 +16,7 @@ export async function showSession(id: string): Promise<void> {
   const manager = createLocalManager();
   const session = manager.getRequired(id);
   printSession(session);
-  for (const event of manager.store.listEvents(id)) {
+  for (const event of manager.listEvents(id)) {
     printEvent(event);
   }
 }

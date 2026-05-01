@@ -19,6 +19,7 @@ class CodexRunnerHandle implements RunnerHandle {
   pid = 0;
   private proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
   private threadId: string | undefined;
+  private pendingFollowUp: string | null = null;
 
   /** Creates a Codex runner handle. */
   constructor(
@@ -52,7 +53,8 @@ class CodexRunnerHandle implements RunnerHandle {
   async send(userText: string): Promise<void> {
     const threadId = this.threadId ?? this.opts.resumeThreadId;
     if (!threadId) {
-      throw new Error("Codex thread id is not available yet");
+      this.pendingFollowUp = userText;
+      return;
     }
     this.spawnTurn(userText, threadId);
   }
@@ -70,6 +72,11 @@ class CodexRunnerHandle implements RunnerHandle {
     if (event.type === "thread.started" && threadId) {
       this.threadId = threadId;
       this.opts.onThreadId?.(threadId);
+      if (this.pendingFollowUp) {
+        const text = this.pendingFollowUp;
+        this.pendingFollowUp = null;
+        this.spawnTurn(text, threadId);
+      }
       return;
     }
     if (event.type === "turn.started") {

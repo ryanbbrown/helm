@@ -28,7 +28,7 @@ session.command("list").description("List sessions").action(run(listSessions));
 session.command("show").argument("<id>").description("Show a session").action((id) => run(() => showSession(id))());
 session.command("send").argument("<id>").argument("<text>").description("Send a follow-up").action((id, text) => run(() => sendSession(id, text))());
 session.command("stop").argument("<id>").description("Stop a session").action((id) => run(() => stopSession(id))());
-session.command("archive").argument("<id>").description("Archive a session").action((id) => run(() => archiveSession(id))());
+session.command("archive").argument("<id>").option("--force").description("Archive a session").action((id, options) => run(() => archiveSession(id, options))());
 
 const daemon = program.command("daemon").description("Run the HTTP/SSE daemon");
 daemon.command("start").description("Start daemon in the foreground").action(startDaemon);

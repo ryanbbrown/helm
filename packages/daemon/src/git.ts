@@ -32,3 +32,24 @@ export async function removeWorktree(repoPath: string, path: string): Promise<vo
 export async function deleteBranch(repoPath: string, branch: string): Promise<void> {
   await $`git -C ${repoPath} branch -D ${branch}`.quiet().nothrow();
 }
+
+/** Reads uncommitted changes in a worktree. */
+export async function worktreeStatus(path: string): Promise<string> {
+  const result = await $`git -C ${path} status --porcelain`.quiet();
+  return result.stdout.toString().trim();
+}
+
+/** Reads commits reachable only from the session branch. */
+export async function unsharedCommits(repoPath: string, branch: string): Promise<string> {
+  const format = "%(refname)";
+  const refsResult = await $`git -C ${repoPath} for-each-ref --format=${format} refs/heads refs/remotes`.quiet();
+  const refs = refsResult.stdout
+    .toString()
+    .split("\n")
+    .map((ref) => ref.trim())
+    .filter((ref) => ref && ref !== `refs/heads/${branch}`);
+  const result = refs.length === 0
+    ? await $`git -C ${repoPath} log ${branch} --oneline`.quiet()
+    : await $`git -C ${repoPath} log ${branch} --not ${refs} --oneline`.quiet();
+  return result.stdout.toString().trim();
+}
