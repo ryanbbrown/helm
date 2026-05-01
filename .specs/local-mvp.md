@@ -1,7 +1,7 @@
 # Helm — Local MVP System Specification
 
 Status: Draft v1
-Scope: Local-only execution. No cloud/remote runtimes. No GitHub API integration. No manager-level chat.
+Scope: Local-only execution. No cloud/remote runtimes. No direct GitHub API integration; PR creation uses the local `gh` CLI. No manager-level chat.
 
 ## Normative Language
 
@@ -313,15 +313,14 @@ The runner translates adapter-specific events into a shared `SessionEvent` shape
 | `kind` | Surfaced to UI? | Notes |
 |---|---|---|
 | `session_started` | ✓ | Includes session id, repo, branch, worktree path |
+| `user_message` | ✓ | Initial prompt and follow-up messages sent by the user |
 | `thinking` | ✓ (as indicator) | Emitted on first non-result delta after a user msg |
 | `assistant_message` | ✓ | Final, post-turn assistant text. Only this is shown. |
-| `tool_use` | ✗ | Logged for transcript / debugging |
-| `tool_result` | ✗ | Logged for transcript / debugging |
 | `turn_complete` | ✓ (status flip) | Triggers `running → awaiting_input` |
 | `error` | ✓ | Surfaces failure to UI |
 | `exit` | ✓ | Process exited |
 
-The MVP UI contract is: **show `session_started`, `thinking`, `assistant_message`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas are coalesced; only the final assistant message of each turn is surfaced.
+The MVP UI contract is: **show `session_started`, `user_message`, `thinking`, `assistant_message`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas and adapter-specific tool events are kept in the raw JSONL log, not persisted as normalized timeline events; only the final assistant message of each turn is surfaced.
 
 `diff_changed` is a live-only SSE hint that tells the UI the worktree diff for a session may have changed. It carries no payload beyond `{ kind: "diff_changed", sessionId }`, is not persisted as a normalized event, and is not replayed from SQLite.
 
@@ -361,6 +360,30 @@ The session manager consumes `events`, persists them, and never branches on whic
 
 The MVP never touches the user's checked-out main branch — fetch is read-only, worktree create branches off `origin/<default>` directly.
 
+### 8.1 Structured worktree diff
+
+`GET /sessions/:id/diff` returns a `DiffResult` computed by the daemon from the session worktree. It is read-only and never mutates the worktree or session row.
+
+Diff bases:
+- `base=branch` (default) diffs the final worktree state against `git merge-base origin/<default_branch> HEAD`, so it represents the session's contribution relative to the remote default branch.
+- `base=uncommitted` diffs the current worktree against `HEAD`, so it represents only staged, unstaged, and untracked work not yet committed.
+
+Tracked files are enumerated with git diff name/status and numstat using rename and copy detection (`-M -C --find-copies-harder`). Untracked, non-ignored files are appended as synthetic `added` entries. Each file entry includes `path`, `status`, optional `oldPath`, additions/deletions, binary flag, optional old/new byte sizes, too-large flag, and optional patch text.
+
+Patch text is omitted for binary files and for files or patches over `DIFF_FILE_SIZE_LIMIT` (500,000 bytes); those entries remain in the summary with `isBinary` or `isTooLarge` set. The response includes at most `DIFF_FILE_COUNT_LIMIT` (200) file entries, sets `truncated: true` when more files exist, and keeps `totalFiles` as the full count before truncation. Archived sessions do not have live worktree diffs and return `410 archived`.
+
+### 8.2 Create PR
+
+`POST /sessions/:id/pull-request` creates or records one GitHub pull request for the session branch. It is a separate operation from archive and does not change session status. Archived sessions return `409 archived`.
+
+Preconditions:
+- The worktree MUST be clean; otherwise the daemon returns `409 dirty_worktree` with dirty paths.
+- `origin` MUST point to GitHub using SSH scp-like, HTTPS, or `ssh://git@github.com/...` syntax; otherwise the daemon returns `409 non_github_remote`.
+- `gh` MUST be installed and authenticated; otherwise the daemon returns `409 gh_unavailable`.
+- The session branch MUST have commits ahead of `origin/<default_branch>`; otherwise the daemon returns `409 no_commits_ahead`.
+
+On success, Helm fetches origin, pushes `helm/<id>` to origin with upstream tracking, and runs `gh pr create --base <default_branch> --head helm/<id> --title <title> --body <body>`. If `gh pr create` reports that a PR already exists for the head branch, Helm looks up an open PR for that head branch and treats the found URL as success. The resulting URL is persisted to `sessions.pull_request_url` and returned in the `PublicSession`. If `pull_request_url` is already set, the route is idempotent and returns the current public session without pushing or invoking `gh`.
+
 ## 9. CLI Surface (MVP)
 
 | Command | Purpose |
@@ -380,7 +403,7 @@ If the daemon is reachable, every `session ...` command issues an authenticated 
 
 ## 10. Persistence
 
-SQLite at `~/.helm/state/helm.db`. Schema is two tables (`sessions`, `session_events`) per §5.1.3 and §5.1.4.
+SQLite at `~/.helm/state/helm.db`. The domain schema is `sessions` and `session_events` per §5.1.3 and §5.1.4, with a `schema_migrations` table for additive migrations.
 
 Append-only `~/.helm/logs/<id>.jsonl` is the raw agent stream — both for debugging and as the source of truth for replay if the SQLite events table is rebuilt.
 
@@ -404,16 +427,16 @@ The daemon listens on `127.0.0.1:7878` (configurable via `HELM_PORT`). All route
 | `POST` | `/sessions/:id/messages` | Sends a follow-up. Body: `{ text }`. |
 | `POST` | `/sessions/:id/stop` | Stops the running agent (status → `stopped`). |
 | `POST` | `/sessions/:id/archive` | Archives the session (status → `archived`). Body: `{ force? }`. Returns 409 with `code: "dirty_worktree"` or `"unshared_commits"` when preconditions fail without `force`. |
-| `POST` | `/sessions/:id/pull-request` | Pushes the session branch and creates a GitHub PR via `gh`. Body: `{ title?, body? }`. Returns the updated `PublicSession` with `pull_request_url`, or `409` with `dirty_worktree`, `no_commits_ahead`, `gh_unavailable`, `non_github_remote`, `gh_failed`, or `archived`. |
+| `POST` | `/sessions/:id/pull-request` | Pushes the session branch and creates a GitHub PR via `gh`. Body: `{ title?, body? }`. Returns the updated `PublicSession` with `pull_request_url`, `404` for unknown sessions, or `409` with `dirty_worktree`, `no_commits_ahead`, `gh_unavailable`, `non_github_remote`, `gh_failed`, or `archived`. |
 
 ### 11.2 SSE event names
 
-Each SSE message uses a named event:
+Live SSE payloads use named events, plus a keep-alive comment frame:
 
 - `event: session` — payload is a `Session` DTO. Emitted whenever a session row mutates.
 - `event: event` — payload is a `SessionEvent`. Emitted whenever a normalized event is appended.
 - `event: diff_changed` — live-only hint payload `{ kind: "diff_changed", sessionId }`; not persisted and not replayed.
-- `event: ping` — keep-alive comment frames every 15 s.
+- `: ping` — keep-alive comment frames every 15 s.
 
 Replay-on-connect: each SSE response first emits any persisted events with `id > after`, then attaches to the live bus. Implementations MUST NOT lose events that arrive between the snapshot and the live attach (subscribe before replay, dedupe by id).
 
@@ -447,8 +470,8 @@ The allowlist is defense-in-depth; the token is the actual auth boundary.
 ## 13. Out of Scope (MVP)
 
 - Remote / cloud execution targets.
-- GitHub API: issue linking and direct API automation. PR creation is supported through the local `gh` CLI.
-- The desktop UI itself (this spec produces the substrate it consumes).
+- Direct GitHub API automation, including issue linking. PR creation is supported only through the local `gh` CLI.
+- Native desktop shell packaging. The browser dashboard is in scope for the MVP.
 - A manager-level chat across sessions.
 - Multi-user / multi-tenant.
 - Approval gates / pause-resume.
