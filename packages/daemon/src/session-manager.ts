@@ -1,18 +1,20 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { createId, logPath, worktreePath, type NormalizedEvent, type Session, type SessionEvent } from "@helm/core";
+import { createId, logPath, type NormalizedEvent, type Session, type SessionEvent } from "@helm/core";
 import { findAgent, findRepo, loadConfig, type HelmConfig } from "./config-loader";
-import { deleteBranch, fetchOrigin, createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree, unsharedCommits, worktreeStatus } from "./git";
 import { Store } from "./store";
 import { createRunnerAdapter } from "./runner";
 import type { RunnerHandle } from "./runner/types";
 import { EventBus, type BusEvent } from "./event-bus";
+import { LocalWorktreeProvider } from "./workspace/local";
+import type { WorkspaceProvider } from "./workspace/types";
+
+export { ArchiveSafetyError } from "./workspace/types";
 
 export type SessionManagerOptions = {
   config?: HelmConfig;
   configDir?: string;
   store?: Store;
   bus?: EventBus;
+  workspace?: WorkspaceProvider;
 };
 
 export type CreateSessionInput = {
@@ -30,19 +32,10 @@ export type ArchiveOptions = {
   force?: boolean;
 };
 
-export class ArchiveSafetyError extends Error {
-  /** Creates an archive safety error. */
-  constructor(
-    readonly code: "dirty_worktree" | "unshared_commits",
-    readonly details: string
-  ) {
-    super(code);
-  }
-}
-
 export class SessionManager {
   private store: Store;
   private bus: EventBus;
+  private workspace: WorkspaceProvider;
   private handles = new Map<string, RunnerHandle>();
   private cachedConfig?: HelmConfig;
   private configDir?: string;
@@ -51,29 +44,26 @@ export class SessionManager {
   constructor(options: SessionManagerOptions = {}) {
     this.store = options.store ?? new Store();
     this.bus = options.bus ?? new EventBus();
+    this.workspace = options.workspace ?? new LocalWorktreeProvider();
     this.cachedConfig = options.config;
     this.configDir = options.configDir;
   }
 
-  /** Creates a worktree-backed agent session. */
+  /** Creates a workspace-backed agent session. */
   async create(input: CreateSessionInput): Promise<Session> {
     const config = await this.loadHelmConfig();
     const repo = findRepo(config, input.repo);
     const agent = findAgent(config, input.agent);
     const id = createId();
-    const branch = `helm/${id}`;
-    const wtPath = worktreePath(repo.name, id);
+    const workspace = await this.workspace.create({ repo, sessionId: id });
     const now = new Date().toISOString();
 
-    await fetchOrigin(repo.path);
-    mkdirSync(dirname(wtPath), { recursive: true });
-    await gitCreateWorktree(repo.path, branch, wtPath, repo.default_branch);
     this.store.insertSession({
       id,
       repo_name: repo.name,
       agent_name: agent.name,
-      branch,
-      worktree_path: wtPath,
+      branch: workspace.branch,
+      worktree_path: workspace.cwd,
       status: "created",
       created_at: now,
       updated_at: now
@@ -82,8 +72,8 @@ export class SessionManager {
       kind: "session_started",
       sessionId: id,
       repo: repo.name,
-      branch,
-      worktreePath: wtPath
+      branch: workspace.branch,
+      worktreePath: workspace.cwd
     });
     if (input.prompt) {
       this.persistEvent(id, { kind: "user_message", text: input.prompt });
@@ -92,7 +82,7 @@ export class SessionManager {
     const adapter = createRunnerAdapter(agent);
     const handle = adapter.spawn({
       command: agent.command,
-      cwd: wtPath,
+      cwd: workspace.cwd,
       extraArgs: agent.args,
       initialPrompt: input.prompt,
       logPath: logPath(id),
@@ -164,16 +154,16 @@ export class SessionManager {
     const config = await this.loadHelmConfig();
     const session = this.getRequired(id);
     const repo = findRepo(config, session.repo_name);
+    const workspace = this.workspace.fromSession({ repo, session });
     if (!options.force) {
-      await this.assertArchiveSafe(repo.path, session);
+      await this.workspace.assertRemoveSafe(workspace, { repo });
     }
     const handle = this.handles.get(id);
     if (handle) {
       await handle.stop();
       this.handles.delete(id);
     }
-    await gitRemoveWorktree(repo.path, session.worktree_path);
-    await deleteBranch(repo.path, session.branch);
+    await this.workspace.remove(workspace, { repo, force: options.force ?? false });
     this.patch(id, { status: "archived", pid: null });
     return this.getRequired(id);
   }
@@ -265,17 +255,5 @@ export class SessionManager {
   private async loadHelmConfig(): Promise<HelmConfig> {
     this.cachedConfig ??= await loadConfig(this.configDir);
     return this.cachedConfig;
-  }
-
-  /** Refuses destructive archive when work could be lost. */
-  private async assertArchiveSafe(repoPath: string, session: Session): Promise<void> {
-    const dirty = await worktreeStatus(session.worktree_path);
-    if (dirty) {
-      throw new ArchiveSafetyError("dirty_worktree", dirty);
-    }
-    const commits = await unsharedCommits(repoPath, session.branch);
-    if (commits) {
-      throw new ArchiveSafetyError("unshared_commits", commits);
-    }
   }
 }

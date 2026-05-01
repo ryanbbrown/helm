@@ -1,8 +1,8 @@
-import type { Session } from "@helm/core";
+import type { PublicSession } from "@helm/core";
 import { StatusBadge } from "./StatusBadge";
 
 type SessionListProps = {
-  sessions: Session[];
+  sessions: PublicSession[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 };

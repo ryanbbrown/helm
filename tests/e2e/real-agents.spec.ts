@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import type { NormalizedEvent, Session, SessionEvent } from "@helm/core";
+import type { PublicNormalizedEvent, PublicSession, PublicSessionEvent } from "@helm/core";
 import { e2eAuthHeaders, readE2eToken } from "./auth";
 
 const cases = [
@@ -19,11 +20,11 @@ for (const entry of cases) {
     test.setTimeout(180_000);
     const fileName = `helm-${entry.repo}-${entry.agent}-${Date.now()}.md`;
     const initialPrompt = `Create a markdown file named ${fileName} with one short sentence of random content. Do not ask follow-up questions.`;
-    let createdSession: Session | null = null;
+    let createdSession: PublicSession | null = null;
 
     page.on("response", async (response) => {
       if (response.request().method() === "POST" && response.url().endsWith("/sessions") && response.ok()) {
-        createdSession = (await response.json()) as Session;
+        createdSession = (await response.json()) as PublicSession;
       }
     });
 
@@ -73,9 +74,9 @@ async function expectUserMessageRightOfAssistant(page: Page, userText: string): 
 }
 
 /** Waits for a session file and stops early on terminal agent failures. */
-async function waitForFile(session: Session, fileName: string, timeoutMs: number): Promise<void> {
+async function waitForFile(session: PublicSession, fileName: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  const filePath = `${session.worktree_path}/${fileName}`;
+  const filePath = join(helmHome(), "worktrees", session.repo_name, session.id, fileName);
   while (Date.now() < deadline) {
     if (existsSync(filePath)) {
       return;
@@ -92,9 +93,9 @@ async function waitForFile(session: Session, fileName: string, timeoutMs: number
 }
 
 /** Reads a session and all persisted events from the test daemon. */
-async function readSessionDetail(id: string): Promise<{ session: Session; events: SessionEvent[] }> {
+async function readSessionDetail(id: string): Promise<{ session: PublicSession; events: PublicSessionEvent[] }> {
   const response = await fetch(`${apiUrl()}/sessions/${id}`, { headers: await e2eAuthHeaders() });
-  return (await response.json()) as { session: Session; events: SessionEvent[] };
+  return (await response.json()) as { session: PublicSession; events: PublicSessionEvent[] };
 }
 
 /** Reads a session status from the test daemon. */
@@ -122,8 +123,13 @@ function apiUrl(): string {
   return process.env.HELM_E2E_API_URL ?? "http://127.0.0.1:7878";
 }
 
+/** Returns the Helm home path for e2e tests. */
+function helmHome(): string {
+  return process.env.HELM_HOME ?? process.env.HELM_E2E_HELM_HOME ?? join(process.cwd(), "tests/fixtures/helm-home");
+}
+
 /** Returns the latest readable error message from a session event list. */
-function latestErrorMessage(events: SessionEvent[]): string {
+function latestErrorMessage(events: PublicSessionEvent[]): string {
   const error = events
     .slice()
     .reverse()
@@ -135,7 +141,7 @@ function latestErrorMessage(events: SessionEvent[]): string {
 }
 
 /** Extracts provider error text from a normalized error payload. */
-function extractErrorText(payload: NormalizedEvent): string {
+function extractErrorText(payload: PublicNormalizedEvent): string {
   if (payload.kind !== "error") {
     return "unknown error";
   }

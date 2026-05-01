@@ -53,3 +53,14 @@ export type NormalizedEvent =
   | TurnCompleteEvent
   | ErrorEvent
   | ExitEvent;
+
+export type PublicSessionStartedEvent = Omit<SessionStartedEvent, "worktreePath">;
+
+export type PublicNormalizedEvent =
+  | PublicSessionStartedEvent
+  | UserMessageEvent
+  | ThinkingEvent
+  | AssistantMessageEvent
+  | TurnCompleteEvent
+  | ErrorEvent
+  | ExitEvent;

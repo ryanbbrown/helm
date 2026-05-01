@@ -1,11 +1,11 @@
-import type { Session, SessionEvent } from "@helm/core";
+import type { PublicSession, PublicSessionEvent } from "@helm/core";
 import { Composer } from "./Composer";
 import { Header } from "./Header";
 import { MessageTimeline } from "./MessageTimeline";
 
 type SessionDetailProps = {
-  session: Session;
-  events: SessionEvent[];
+  session: PublicSession;
+  events: PublicSessionEvent[];
   onRefresh: () => void;
   onSend: (text: string) => Promise<void>;
   onStop: () => void;

@@ -1,9 +1,9 @@
-import type { Session, SessionEvent } from "@helm/core";
+import type { PublicSession, PublicSessionEvent, Session, SessionEvent } from "@helm/core";
 
 const SURFACED = new Set(["session_started", "thinking", "assistant_message", "error", "exit"]);
 
 /** Formats a session list as a table. */
-export function printSessionTable(sessions: Session[]): void {
+export function printSessionTable(sessions: Array<Session | PublicSession>): void {
   if (sessions.length === 0) {
     console.log("No sessions.");
     return;
@@ -21,13 +21,15 @@ export function printSessionTable(sessions: Session[]): void {
 }
 
 /** Prints a session detail. */
-export function printSession(session: Session): void {
+export function printSession(session: Session | PublicSession): void {
   console.log(`id: ${session.id}`);
   console.log(`repo: ${session.repo_name}`);
   console.log(`agent: ${session.agent_name}`);
   console.log(`status: ${session.status}`);
   console.log(`branch: ${session.branch}`);
-  console.log(`worktree: ${session.worktree_path}`);
+  if ("worktree_path" in session) {
+    console.log(`worktree: ${session.worktree_path}`);
+  }
   if (session.last_assistant_message) {
     console.log("\nlast assistant message:");
     console.log(session.last_assistant_message);
@@ -35,7 +37,7 @@ export function printSession(session: Session): void {
 }
 
 /** Prints a surfaced session event. */
-export function printEvent(event: SessionEvent): void {
+export function printEvent(event: SessionEvent | PublicSessionEvent): void {
   if (!SURFACED.has(event.kind)) {
     return;
   }

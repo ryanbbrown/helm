@@ -1,28 +1,28 @@
 "use client";
 
 import { useEffect } from "react";
-import type { Session, SessionEvent } from "@helm/core";
-import { API_BASE, withToken } from "./api";
+import type { PublicSession, PublicSessionEvent } from "@helm/core";
+import { sseUrl } from "./api";
 
 /** Subscribes to all session and event updates. */
-export function useAllSessionsStream(onSession: (session: Session) => void, onEvent: (event: SessionEvent) => void): void {
+export function useAllSessionsStream(onSession: (session: PublicSession) => void, onEvent: (event: PublicSessionEvent) => void): void {
   useEffect(() => {
-    const source = new EventSource(`${API_BASE}${withToken("/sessions/events")}`);
-    source.addEventListener("session", (event) => onSession(JSON.parse((event as MessageEvent).data) as Session));
-    source.addEventListener("event", (event) => onEvent(JSON.parse((event as MessageEvent).data) as SessionEvent));
+    const source = new EventSource(sseUrl("/sessions/events"));
+    source.addEventListener("session", (event) => onSession(JSON.parse((event as MessageEvent).data) as PublicSession));
+    source.addEventListener("event", (event) => onEvent(JSON.parse((event as MessageEvent).data) as PublicSessionEvent));
     return () => source.close();
   }, [onEvent, onSession]);
 }
 
 /** Subscribes to updates for one session. */
-export function useSessionEvents(sessionId: string | null, onSession: (session: Session) => void, onEvent: (event: SessionEvent) => void): void {
+export function useSessionEvents(sessionId: string | null, onSession: (session: PublicSession) => void, onEvent: (event: PublicSessionEvent) => void): void {
   useEffect(() => {
     if (!sessionId) {
       return;
     }
-    const source = new EventSource(`${API_BASE}${withToken(`/sessions/${sessionId}/events`)}`);
-    source.addEventListener("session", (event) => onSession(JSON.parse((event as MessageEvent).data) as Session));
-    source.addEventListener("event", (event) => onEvent(JSON.parse((event as MessageEvent).data) as SessionEvent));
+    const source = new EventSource(sseUrl(`/sessions/${sessionId}/events`));
+    source.addEventListener("session", (event) => onSession(JSON.parse((event as MessageEvent).data) as PublicSession));
+    source.addEventListener("event", (event) => onEvent(JSON.parse((event as MessageEvent).data) as PublicSessionEvent));
     return () => source.close();
   }, [onEvent, onSession, sessionId]);
 }

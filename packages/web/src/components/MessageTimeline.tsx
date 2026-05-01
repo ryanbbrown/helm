@@ -1,7 +1,7 @@
-import type { SessionEvent } from "@helm/core";
+import type { PublicSessionEvent } from "@helm/core";
 
 /** Renders the surfaced message timeline for a session. */
-export function MessageTimeline({ events }: { events: SessionEvent[] }) {
+export function MessageTimeline({ events }: { events: PublicSessionEvent[] }) {
   const visible = events.filter((event) => ["session_started", "user_message", "thinking", "assistant_message", "error", "exit"].includes(event.kind));
   return (
     <div className="timeline">

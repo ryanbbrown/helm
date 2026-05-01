@@ -1,9 +1,9 @@
 import { RefreshCw, Square } from "lucide-react";
-import type { Session } from "@helm/core";
+import type { PublicSession } from "@helm/core";
 import { StatusBadge } from "./StatusBadge";
 
 type HeaderProps = {
-  session: Session | null;
+  session: PublicSession | null;
   onRefresh: () => void;
   onStop: () => void;
 };

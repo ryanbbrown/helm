@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@helm/core";
+import { toPublicSession, toPublicSessionEvent, type SessionEvent } from "@helm/core";
 import { createDaemonToken } from "./auth";
 import { ArchiveSafetyError, SessionManager } from "./session-manager";
 
@@ -6,8 +6,7 @@ const DEFAULT_PORT = 7878;
 const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
 
 /** Starts the Helm HTTP/SSE daemon. */
-export function startServer(port = DEFAULT_PORT, token = createDaemonToken()): Bun.Server<unknown> {
-  const manager = new SessionManager();
+export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), manager = new SessionManager()): Bun.Server<unknown> {
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
@@ -48,11 +47,11 @@ async function route(request: Request, manager: SessionManager, token: string): 
     return json(request, await manager.getPublicConfig());
   }
   if (request.method === "GET" && url.pathname === "/sessions") {
-    return json(request, manager.list(url.searchParams.get("archived") === "1"));
+    return json(request, manager.list(url.searchParams.get("archived") === "1").map(toPublicSession));
   }
   if (request.method === "POST" && url.pathname === "/sessions") {
     const body = (await request.json()) as { repo: string; agent: string; prompt?: string };
-    return json(request, await manager.create(body), 201);
+    return json(request, toPublicSession(await manager.create(body)), 201);
   }
   if (request.method === "GET" && url.pathname === "/sessions/events") {
     return sessionEventsStream(request, manager, Number(url.searchParams.get("after") ?? "0"));
@@ -64,24 +63,36 @@ async function route(request: Request, manager: SessionManager, token: string): 
       if (!session) {
         return json(request, { error: "Not found" }, 404);
       }
-      return json(request, { session, events: manager.listEvents(id) });
+      return json(request, { session: toPublicSession(session), events: manager.listEvents(id).map(toPublicSessionEvent) });
     }
     if (request.method === "GET" && parts[2] === "events") {
       return sessionStream(request, manager, id, Number(url.searchParams.get("after") ?? "0"));
     }
     if (request.method === "POST" && parts[2] === "messages") {
       const body = (await request.json()) as { text: string };
-      return json(request, await manager.send(id, body.text));
+      return json(request, toPublicSession(await manager.send(id, body.text)));
     }
     if (request.method === "POST" && parts[2] === "stop") {
-      return json(request, await manager.stop(id));
+      return json(request, toPublicSession(await manager.stop(id)));
     }
     if (request.method === "POST" && parts[2] === "archive") {
-      return json(request, await manager.archive(id, { force: url.searchParams.get("force") === "1" }));
+      return json(request, toPublicSession(await manager.archive(id, { force: await archiveForce(request, url) })));
     }
   }
 
   return json(request, { error: "Not found" }, 404);
+}
+
+/** Reads the archive force flag from JSON body or legacy query string. */
+async function archiveForce(request: Request, url: URL): Promise<boolean> {
+  if (url.searchParams.get("force") === "1") {
+    return true;
+  }
+  if (!request.headers.get("Content-Type")?.includes("application/json")) {
+    return false;
+  }
+  const body = (await request.json().catch(() => ({}))) as { force?: boolean };
+  return body.force === true;
 }
 
 /** Creates a JSON response. */
@@ -150,22 +161,22 @@ function sessionEventsStream(request: Request, manager: SessionManager, afterId:
         if (replaying) {
           buffer.push(event.event);
         } else {
-          send("event", event.event);
+          send("event", toPublicSessionEvent(event.event));
         }
       }
       if (event.type === "session") {
-        send("session", event.session);
+        send("session", toPublicSession(event.session));
       }
     });
     let lastSentId = afterId;
     for (const event of manager.listAllEvents(afterId)) {
-      send("event", event);
+      send("event", toPublicSessionEvent(event));
       lastSentId = event.id;
     }
     replaying = false;
     for (const event of buffer) {
       if (event.id > lastSentId) {
-        send("event", event);
+        send("event", toPublicSessionEvent(event));
       }
     }
     return unsubscribe;
@@ -182,22 +193,22 @@ function sessionStream(request: Request, manager: SessionManager, sessionId: str
         if (replaying) {
           buffer.push(event.event);
         } else {
-          send("event", event.event);
+          send("event", toPublicSessionEvent(event.event));
         }
       }
       if (event.type === "session" && event.session.id === sessionId) {
-        send("session", event.session);
+        send("session", toPublicSession(event.session));
       }
     });
     let lastSentId = afterId;
     for (const event of manager.listEvents(sessionId, afterId)) {
-      send("event", event);
+      send("event", toPublicSessionEvent(event));
       lastSentId = event.id;
     }
     replaying = false;
     for (const event of buffer) {
       if (event.id > lastSentId) {
-        send("event", event);
+        send("event", toPublicSessionEvent(event));
       }
     }
     return unsubscribe;

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { tokenPath } from "@helm/core";
-import type { Session, SessionEvent } from "@helm/core";
+import type { PublicSession, PublicSessionEvent } from "@helm/core";
 
 const DEFAULT_BASE_URL = `http://127.0.0.1:${Bun.env.HELM_PORT ?? "7878"}`;
 
 export type SessionDetail = {
-  session: Session;
-  events: SessionEvent[];
+  session: PublicSession;
+  events: PublicSessionEvent[];
 };
 
 export class DaemonClient {
@@ -20,12 +20,12 @@ export class DaemonClient {
   }
 
   /** Creates a session through the daemon. */
-  async create(repo: string, agent: string, prompt?: string): Promise<Session> {
+  async create(repo: string, agent: string, prompt?: string): Promise<PublicSession> {
     return this.request("/sessions", { method: "POST", body: JSON.stringify({ repo, agent, prompt }) });
   }
 
   /** Lists daemon sessions. */
-  async list(): Promise<Session[]> {
+  async list(): Promise<PublicSession[]> {
     return this.request("/sessions");
   }
 
@@ -35,22 +35,22 @@ export class DaemonClient {
   }
 
   /** Sends a follow-up through the daemon. */
-  async send(id: string, text: string): Promise<Session> {
+  async send(id: string, text: string): Promise<PublicSession> {
     return this.request(`/sessions/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
   }
 
   /** Stops a daemon session. */
-  async stop(id: string): Promise<Session> {
+  async stop(id: string): Promise<PublicSession> {
     return this.request(`/sessions/${id}/stop`, { method: "POST" });
   }
 
   /** Archives a daemon session. */
-  async archive(id: string, force = false): Promise<Session> {
-    return this.request(`/sessions/${id}/archive${force ? "?force=1" : ""}`, { method: "POST" });
+  async archive(id: string, force = false): Promise<PublicSession> {
+    return this.request(`/sessions/${id}/archive`, { method: "POST", body: JSON.stringify({ force }) });
   }
 
   /** Streams session events through SSE. */
-  async *streamEvents(id: string): AsyncIterable<SessionEvent> {
+  async *streamEvents(id: string): AsyncIterable<PublicSessionEvent> {
     const response = await fetch(`${this.baseUrl}/sessions/${id}/events`, {
       headers: this.authHeaders()
     });
@@ -59,7 +59,7 @@ export class DaemonClient {
     }
     for await (const event of parseSse(response.body)) {
       if (event.name === "event") {
-        yield JSON.parse(event.data) as SessionEvent;
+        yield JSON.parse(event.data) as PublicSessionEvent;
       }
     }
   }

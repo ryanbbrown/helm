@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import { databasePath, type NormalizedEvent, type Session, type SessionEvent, type SessionStatus } from "@helm/core";
-import { schemaSql } from "./migrations";
+import { applyMigrations } from "./migrations";
 
 type SessionRow = Omit<Session, "pid"> & { pid: number | null };
 type EventRow = Omit<SessionEvent, "payload"> & { payload: string };
@@ -16,7 +16,7 @@ export class Store {
   constructor(path = databasePath()) {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
-    this.db.exec(schemaSql);
+    applyMigrations(this.db);
   }
 
   /** Inserts a new session row. */

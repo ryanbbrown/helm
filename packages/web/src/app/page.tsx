@@ -2,7 +2,7 @@
 
 import { Archive, Play } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { Session, SessionEvent } from "@helm/core";
+import type { PublicSession, PublicSessionEvent } from "@helm/core";
 import { ApiError, archiveSession, createSession, getConfig, getSession, listSessions, sendMessage, stopSession, type HelmConfig } from "../lib/api";
 import { useAllSessionsStream, useSessionEvents } from "../lib/sse";
 import { EmptyState } from "../components/EmptyState";
@@ -12,9 +12,9 @@ import { SessionList } from "../components/SessionList";
 
 /** Renders the Helm dashboard. */
 export default function Page() {
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [sessions, setSessions] = useState<PublicSession[]>([]);
+  const [events, setEvents] = useState<PublicSessionEvent[]>([]);
   const [repos, setRepos] = useState<HelmConfig["repos"]>([]);
   const [agents, setAgents] = useState<HelmConfig["agents"]>([]);
   const [repoName, setRepoName] = useState("");
@@ -23,14 +23,14 @@ export default function Page() {
   const [starting, setStarting] = useState(false);
   const selected = useMemo(() => sessions.find((session) => session.id === selectedId) ?? null, [selectedId, sessions]);
 
-  const mergeSession = useCallback((session: Session) => {
+  const mergeSession = useCallback((session: PublicSession) => {
     setSessions((current) => {
       const next = current.filter((entry) => entry.id !== session.id);
       return [session, ...next].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     });
   }, []);
 
-  const mergeEvent = useCallback((event: SessionEvent) => {
+  const mergeEvent = useCallback((event: PublicSessionEvent) => {
     setEvents((current) => {
       if (current.some((entry) => entry.id === event.id)) {
         return current;
