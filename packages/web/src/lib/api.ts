@@ -1,4 +1,4 @@
-import type { PublicSession, PublicSessionEvent } from "@helm/core";
+import type { DiffBase, DiffResult, PublicSession, PublicSessionEvent } from "@helm/core";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:7878";
 const API_STORAGE_KEY = "helm.apiBase";
@@ -49,6 +49,16 @@ export async function stopSession(id: string): Promise<PublicSession> {
 /** Archives a session. */
 export async function archiveSession(id: string, force = false): Promise<PublicSession> {
   return request(`/sessions/${id}/archive`, { method: "POST", body: JSON.stringify({ force }) });
+}
+
+/** Reads the daemon-computed worktree diff for a session. */
+export async function getSessionDiff(id: string, base: DiffBase): Promise<DiffResult> {
+  return request(`/sessions/${id}/diff?base=${encodeURIComponent(base)}`);
+}
+
+/** Creates a pull request for a session branch. */
+export async function createPullRequest(id: string, input: { title: string; body: string }): Promise<PublicSession> {
+  return request(`/sessions/${id}/pull-request`, { method: "POST", body: JSON.stringify(input) });
 }
 
 export class ApiError extends Error {

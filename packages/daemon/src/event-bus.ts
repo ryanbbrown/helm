@@ -1,8 +1,9 @@
-import type { Session, SessionEvent } from "@helm/core";
+import type { DiffChangedHint, Session, SessionEvent } from "@helm/core";
 
 export type BusEvent =
   | { type: "session"; session: Session }
-  | { type: "event"; event: SessionEvent };
+  | { type: "event"; event: SessionEvent }
+  | { type: "hint"; hint: DiffChangedHint };
 
 type Listener = (event: BusEvent) => void;
 

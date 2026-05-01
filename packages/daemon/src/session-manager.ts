@@ -1,4 +1,16 @@
-import { createId, logPath, type NormalizedEvent, type Session, type SessionEvent } from "@helm/core";
+import {
+  DIFF_FILE_COUNT_LIMIT,
+  DIFF_FILE_SIZE_LIMIT,
+  createId,
+  logPath,
+  toPublicSession,
+  type DiffBase,
+  type DiffResult,
+  type NormalizedEvent,
+  type PublicSession,
+  type Session,
+  type SessionEvent
+} from "@helm/core";
 import { findAgent, findRepo, loadConfig, type HelmConfig } from "./config-loader";
 import { Store } from "./store";
 import { createRunnerAdapter } from "./runner";
@@ -30,6 +42,11 @@ export type PublicHelmConfig = {
 
 export type ArchiveOptions = {
   force?: boolean;
+};
+
+export type CreatePullRequestInput = {
+  title?: string;
+  body?: string;
 };
 
 export class SessionManager {
@@ -168,6 +185,38 @@ export class SessionManager {
     return this.getRequired(id);
   }
 
+  /** Reads a structured diff for a session worktree. */
+  async diff(id: string, opts: { base: DiffBase }): Promise<DiffResult> {
+    const config = await this.loadHelmConfig();
+    const session = this.getRequired(id);
+    const repo = findRepo(config, session.repo_name);
+    const workspace = this.workspace.fromSession({ repo, session });
+    return this.workspace.diff(workspace, {
+      repo,
+      base: opts.base,
+      fileSizeLimit: DIFF_FILE_SIZE_LIMIT,
+      fileCountLimit: DIFF_FILE_COUNT_LIMIT
+    });
+  }
+
+  /** Pushes a session branch and opens or records a pull request. */
+  async createPullRequest(id: string, input: CreatePullRequestInput): Promise<PublicSession> {
+    const session = this.getRequired(id);
+    if (session.pull_request_url) {
+      return toPublicSession(session);
+    }
+    const config = await this.loadHelmConfig();
+    const repo = findRepo(config, session.repo_name);
+    const workspace = this.workspace.fromSession({ repo, session });
+    const title = input.title?.trim() || this.defaultPullRequestTitle(session);
+    const body = input.body?.trim() || `Created from Helm session ${session.id}.`;
+    const result = await this.workspace.createPullRequest(workspace, { repo, title, body });
+    this.store.updatePullRequestUrl(id, result.url);
+    const updated = this.getRequired(id);
+    this.bus.publish({ type: "session", session: updated });
+    return toPublicSession(updated);
+  }
+
   /** Lists sessions. */
   list(includeArchived = false): Session[] {
     return this.store.listSessions(includeArchived);
@@ -212,6 +261,7 @@ export class SessionManager {
         this.patch(id, { status: "running" });
       } else if (event.kind === "turn_complete") {
         this.patch(id, { status: "awaiting_input" });
+        this.bus.publish({ type: "hint", hint: { kind: "diff_changed", sessionId: id } });
       } else if (event.kind === "error") {
         this.patch(id, { status: "failed", pid: null });
       } else if (event.kind === "exit") {
@@ -256,4 +306,16 @@ export class SessionManager {
     this.cachedConfig ??= await loadConfig(this.configDir);
     return this.cachedConfig;
   }
+
+  /** Builds a default pull request title from the first user message. */
+  private defaultPullRequestTitle(session: Session): string {
+    const prompt = this.store.listEvents(session.id).find((event) => event.kind === "user_message" && "text" in event.payload);
+    const text = prompt?.payload.kind === "user_message" ? prompt.payload.text.trim() : "";
+    return truncateTitle(text || `Helm session ${session.id}`);
+  }
+}
+
+/** Truncates pull request titles to a concise length. */
+function truncateTitle(value: string): string {
+  return value.length > 72 ? `${value.slice(0, 69)}...` : value;
 }

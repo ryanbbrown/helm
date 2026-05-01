@@ -1,11 +1,28 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { worktreePath } from "@helm/core";
-import { createWorktree, deleteBranch, fetchOrigin, removeWorktree, unsharedCommits, worktreeStatus } from "../git";
+import { DiffResultSchema, worktreePath } from "@helm/core";
+import {
+  assertGhAvailable,
+  commitsAheadOf,
+  createGitHubPullRequest,
+  createWorktree,
+  deleteBranch,
+  fetchBranch,
+  fetchOrigin,
+  gitDiff,
+  originUrl,
+  pushBranch,
+  removeWorktree,
+  unsharedCommits,
+  worktreeStatus
+} from "../git";
 import {
   ArchiveSafetyError,
+  PullRequestPreconditionError,
   type WorkspaceCreateOptions,
+  type WorkspaceDiffOptions,
   type WorkspaceHandle,
+  type WorkspacePullRequestOptions,
   type WorkspaceProvider,
   type WorkspaceRemoveOptions,
   type WorkspaceSafetyOptions,
@@ -45,4 +62,52 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
       throw new ArchiveSafetyError("unshared_commits", commits);
     }
   }
+
+  /** Reads the current worktree diff for a session. */
+  async diff(handle: WorkspaceHandle, { repo, base, fileSizeLimit, fileCountLimit }: WorkspaceDiffOptions) {
+    const diff = await gitDiff(handle.cwd, { base, defaultBranch: repo.default_branch, fileSizeLimit, fileCountLimit });
+    const result = {
+      base,
+      generatedAt: new Date().toISOString(),
+      files: diff.files,
+      truncated: diff.totalFiles > fileCountLimit,
+      fileLimit: fileCountLimit,
+      totalFiles: diff.totalFiles
+    };
+    return DiffResultSchema.parse(result);
+  }
+
+  /** Pushes the session branch and opens a GitHub pull request. */
+  async createPullRequest(handle: WorkspaceHandle, { repo, title, body }: WorkspacePullRequestOptions) {
+    const dirty = await worktreeStatus(handle.cwd);
+    if (dirty) {
+      throw new PullRequestPreconditionError({ code: "dirty_worktree", details: dirty });
+    }
+    const remote = await originUrl(handle.cwd);
+    if (!isGitHubRemote(remote)) {
+      throw new PullRequestPreconditionError({ code: "non_github_remote", details: remote });
+    }
+    try {
+      await assertGhAvailable(handle.cwd);
+    } catch (error) {
+      throw new PullRequestPreconditionError({ code: "gh_unavailable", details: error instanceof Error ? error.message : String(error) });
+    }
+    await fetchBranch(handle.cwd);
+    if (await commitsAheadOf(handle.cwd, repo.default_branch) === 0) {
+      throw new PullRequestPreconditionError({ code: "no_commits_ahead", details: `No commits ahead of origin/${repo.default_branch}` });
+    }
+    await pushBranch(handle.cwd, handle.branch);
+    try {
+      return { url: await createGitHubPullRequest(handle.cwd, handle.branch, repo.default_branch, title, body) };
+    } catch (error) {
+      throw new PullRequestPreconditionError({ code: "gh_failed", details: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+/** Checks whether a git remote points at GitHub. */
+export function isGitHubRemote(remote: string): boolean {
+  return /^git@github\.com:[^/]+\/[^/]+(?:\.git)?$/.test(remote)
+    || /^https:\/\/github\.com\/[^/]+\/[^/]+(?:\.git)?$/.test(remote)
+    || /^ssh:\/\/git@github\.com\/[^/]+\/[^/]+(?:\.git)?$/.test(remote);
 }

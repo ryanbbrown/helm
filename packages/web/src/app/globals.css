@@ -59,9 +59,35 @@ button.primary:hover {
   background: var(--accent-strong);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button.icon {
   width: 34px;
   padding: 0;
+}
+
+a.button-link {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  display: inline-flex;
+  gap: 6px;
+  height: 34px;
+  justify-content: center;
+  padding: 0 10px;
+  text-decoration: none;
+}
+
+.active-button,
+.segment button.active {
+  background: #e7f4f1;
+  border-color: #9ec7c2;
+  color: var(--accent-strong);
 }
 
 input,
@@ -225,6 +251,40 @@ textarea {
   padding: 18px;
 }
 
+.split {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+}
+
+.split-pane {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.split-divider {
+  background: transparent;
+  cursor: col-resize;
+  position: relative;
+}
+
+.split-divider::after {
+  background: var(--border);
+  bottom: 0;
+  content: "";
+  left: 3px;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.split-divider:focus-visible::after,
+.split-divider:hover::after {
+  background: var(--accent);
+  width: 2px;
+}
+
 .message {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -247,6 +307,170 @@ textarea {
 .event-line {
   color: var(--muted);
   font-size: 13px;
+}
+
+.error-line {
+  color: var(--danger);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.diff-panel {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.diff-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.diff-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.segment {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.segment button {
+  border: 0;
+  border-radius: 0;
+  height: 32px;
+}
+
+.segment button + button {
+  border-left: 1px solid var(--border);
+}
+
+.diff-banner {
+  background: #fff7db;
+  border: 1px solid #ead68e;
+  border-radius: 6px;
+  color: var(--warn);
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.diff-scroll {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.diff-files {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+}
+
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.diff-file-header {
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  gap: 8px;
+  height: auto;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.diff-chevron {
+  color: var(--muted);
+  flex: none;
+}
+
+.diff-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-stat {
+  color: var(--muted);
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.diff-placeholder {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px;
+}
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(30, 36, 32, 0.3);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 16px;
+  position: fixed;
+  z-index: 10;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(30, 36, 32, 0.18);
+  display: grid;
+  gap: 12px;
+  max-width: 560px;
+  padding: 16px;
+  width: 100%;
+}
+
+.modal label {
+  display: grid;
+  gap: 6px;
+}
+
+.modal label span,
+.modal-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .composer {
@@ -283,5 +507,19 @@ textarea {
   .detail {
     height: auto;
     min-height: 70vh;
+  }
+
+  .split {
+    display: block;
+  }
+
+  .split-divider {
+    display: none;
+  }
+
+  .diff-panel {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    min-height: 420px;
   }
 }

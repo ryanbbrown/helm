@@ -9,9 +9,15 @@ Scope: Local-only execution. No cloud/remote runtimes. No GitHub API integration
 
 ## 1. Goal
 
-Provide a single command — `helm session create <repo> <agent>` — that produces a durable, isolated coding-agent session whose meaningful output (final assistant messages, status, artifacts) can be surfaced to a desktop UI without the user touching the terminal.
+Run, observe, and steer multiple coding-agent sessions across local repos through a single durable substrate, so the user manages many concurrent agents from one place rather than juggling terminals.
 
-The MVP does not include the desktop UI itself. It produces the structured event stream and persistent session state that a UI layer will consume.
+The MVP includes:
+
+- A **CLI** (`helm`) for command-line use.
+- A **daemon** that owns session lifecycle and exposes an authenticated HTTP/SSE API.
+- A **dashboard** (Next.js) that consumes that API for browser-based use.
+
+Each session runs in an isolated git worktree, against a configured agent (`claude` or `codex`), with stream-json output normalized into structured events the UI surfaces selectively. The user does not interact with raw agent terminals.
 
 ## 2. System Overview
 
@@ -26,21 +32,22 @@ The MVP does not include the desktop UI itself. It produces the structured event
 │                                                 │            │
 │  ┌──────────────────────────────────────────────▼──────────┐ │
 │  │                  agent runner                           │ │
-│  │  spawns: tmux new-session -d -s helm-<id> '<command>'   │ │
+│  │  spawns: agent as direct child process                  │ │
 │  │  reads:  agent stdout (stream-json)                     │ │
-│  │  writes: agent stdin  (user messages)                   │ │
+│  │  writes: agent stdin  (claude) or re-spawn (codex)      │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                                                              │
-│  ┌─────────────────────────┐                                 │
-│  │   git operations        │  fetch / worktree / branch      │
-│  └─────────────────────────┘                                 │
-└──────────────────────────────────────────────────────────────┘
-                       │
-                       │  IPC (Unix socket; protocol TBD)
-                       ▼
-                ┌─────────────┐
-                │  desktop UI │  (separate, out of MVP scope)
-                └─────────────┘
+│  ┌──────────────┐   ┌──────────────┐                         │
+│  │  http + sse  │   │   git ops    │  fetch / worktree       │
+│  │  (auth-gated)│   │              │                         │
+│  └──────┬───────┘   └──────────────┘                         │
+└─────────┼────────────────────────────────────────────────────┘
+          │
+          │  HTTP + SSE on 127.0.0.1:7878 (token-authenticated)
+          ▼
+   ┌─────────────┐         ┌─────────────────────┐
+   │  helm CLI   │         │  next.js dashboard  │
+   └─────────────┘         └─────────────────────┘
 ```
 
 ### 2.1 Components
@@ -49,7 +56,8 @@ The MVP does not include the desktop UI itself. It produces the structured event
 2. **Store** — SQLite database persisting sessions and events.
 3. **Session Manager** — owns session lifecycle and state transitions.
 4. **Agent Runner** — process supervision for one running agent, plus stdout JSON parsing and stdin writing.
-5. **Git Operations** — fetch, worktree create, worktree remove.
+5. **Git Operations** — fetch, worktree create, worktree remove, dirty/unshared-commit checks.
+6. **HTTP/SSE Server** — token-authenticated local API serving CLI and dashboard (§11, §12).
 
 ## 3. Filesystem Layout
 
@@ -119,6 +127,10 @@ Validation:
 ```
 The runner adapter owns the headless flags (see §7.2).
 
+### 4.3 Optional Runtime Tools
+
+`gh` is optional for normal session execution. It is required only for the dashboard Create PR flow; when missing or unauthenticated, the daemon returns a structured `gh_unavailable` error.
+
 ## 5. Data Model
 
 ### 5.1 Entities
@@ -151,9 +163,10 @@ The runner adapter owns the headless flags (see §7.2).
 | `worktree_path` | text | Absolute path |
 | `agent_thread_id` | text? | Adapter-supplied thread/session id used for resume (e.g. Claude SDK `session_id`, Codex `thread.id`) |
 | `pid` | int? | Agent process pid (null when not running) |
-| `status` | enum | `created` \| `running` \| `awaiting_input` \| `completed` \| `failed` \| `archived` |
+| `status` | enum | `created` \| `running` \| `awaiting_input` \| `completed` \| `failed` \| `stopped` \| `archived` |
 | `last_assistant_message` | text? | Most recent final assistant message |
 | `last_event_at` | timestamp? | Time of most recent event ingestion |
+| `pull_request_url` | text? | GitHub PR URL created for the session branch via `gh` |
 | `created_at` | timestamp | |
 | `updated_at` | timestamp | |
 
@@ -176,8 +189,12 @@ created ──start──▶ running ──final assistant msg──▶ awaiting
                       │
                       ├──exit 0──▶ completed
                       ├──exit !=0─▶ failed
-                      └──user stop─▶ archived
+                      └──user stop─▶ stopped ──user archive──▶ archived
+
+awaiting_input / completed / failed / stopped ──user archive──▶ archived
 ```
+
+`stopped` keeps the worktree on disk and the session visible in default listings; `archived` removes the worktree + branch and hides the session.
 
 ## 6. Session Lifecycle
 
@@ -198,8 +215,10 @@ The user's main checkout is never modified — no `git pull`, no branch switchin
 ### 6.2 `stop_session(id)`
 
 1. Send SIGTERM to the runner (graceful first, SIGKILL after 5s).
-2. Status → `archived`.
-3. Worktree is **not** removed automatically (user may have unpushed commits).
+2. Status → `stopped`.
+3. Worktree and branch are preserved. The session remains visible in `helm session list`.
+
+`stop` is non-destructive. Removal is a separate, explicit `archive` action (§6.4).
 
 ### 6.3 `send_message(id, text)`
 
@@ -211,9 +230,25 @@ The runner adapter chooses how to deliver the message:
 
 `session_manager` does not need to know which mode is in use.
 
-### 6.4 `archive_session(id)`
+### 6.4 `archive_session(id, { force })`
 
-Removes the worktree (`git worktree remove --force`), deletes the branch, marks `archived`. Caller MUST confirm clean working tree first.
+Permanently removes the worktree and the local branch and marks the session `archived`. Archive is destructive and is the only operation in the spec that can lose user-visible work, so it has explicit safety rules.
+
+Preconditions (checked server-side, in order):
+
+1. **Dirty worktree.** `git -C <worktree> status --porcelain` MUST be empty. If non-empty, the daemon refuses with `409 dirty_worktree` and lists the dirty paths in the error payload.
+2. **Unshared commits.** `git -C <repo> log <branch> --not --branches --not --remotes --oneline` MUST be empty. If non-empty, the daemon refuses with `409 unshared_commits` and lists the at-risk shas.
+
+`force: true` skips both checks. The caller MUST surface the specifics from the structured error to the user (e.g. a confirm dialog naming what will be lost) before retrying with `force: true`.
+
+PR creation is a separate `gh`-based operation, not part of `archive_session`, and it does not change session status. After a successful PR, the session row carries `pull_request_url`; unshared-commit archive checks then pass naturally because the branch is on origin.
+
+After preconditions pass:
+
+1. Stop the runner if it is still running (§6.2 transition first).
+2. `git -C <repo> worktree remove --force <worktree>`.
+3. `git -C <repo> branch -D <branch>`.
+4. Status → `archived`.
 
 ## 7. Agent Runner
 
@@ -288,6 +323,8 @@ The runner translates adapter-specific events into a shared `SessionEvent` shape
 
 The MVP UI contract is: **show `session_started`, `thinking`, `assistant_message`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas are coalesced; only the final assistant message of each turn is surfaced.
 
+`diff_changed` is a live-only SSE hint that tells the UI the worktree diff for a session may have changed. It carries no payload beyond `{ kind: "diff_changed", sessionId }`, is not persisted as a normalized event, and is not replayed from SQLite.
+
 ### 7.4 Runner Adapter Contract
 
 Each adapter implements:
@@ -329,12 +366,17 @@ The MVP never touches the user's checked-out main branch — fetch is read-only,
 | Command | Purpose |
 |---|---|
 | `helm config validate` | Lint `repos.json` + `agents.json` |
-| `helm session create <repo> <agent> [-p <prompt>]` | Create + start a session. `-p` is optional initial prompt. |
-| `helm session list` | List sessions with status |
+| `helm daemon start` | Start the HTTP/SSE daemon in the foreground |
+| `helm daemon status` | Report whether the daemon is reachable |
+| `helm daemon stop` | Print stop guidance (Ctrl-C the foreground daemon) |
+| `helm session create <repo> <agent> [-p <prompt>]` | Create + start a session. `-p` is an optional initial prompt. |
+| `helm session list` | List sessions with status (excludes `archived`) |
 | `helm session show <id>` | Print session metadata + last assistant message |
 | `helm session send <id> <text>` | Send follow-up message |
-| `helm session stop <id>` | Stop running agent |
-| `helm session archive <id>` | Remove worktree + branch |
+| `helm session stop <id>` | Stop running agent (status → `stopped`); worktree preserved |
+| `helm session archive <id> [--force]` | Remove worktree + branch (status → `archived`). Requires `--force` if worktree is dirty or has unshared commits. |
+
+If the daemon is reachable, every `session ...` command issues an authenticated HTTP request against it; otherwise the CLI imports `@helm/daemon` and runs the operation in-process. CLI-over-HTTP receives the browser-facing DTO; in-process callers see the full `Session` row.
 
 ## 10. Persistence
 
@@ -342,23 +384,82 @@ SQLite at `~/.helm/state/helm.db`. Schema is two tables (`sessions`, `session_ev
 
 Append-only `~/.helm/logs/<id>.jsonl` is the raw agent stream — both for debugging and as the source of truth for replay if the SQLite events table is rebuilt.
 
-## 11. Out of Scope (MVP)
+## 11. HTTP / SSE API
+
+The daemon listens on `127.0.0.1:7878` (configurable via `HELM_PORT`). All routes except `/health` and the OPTIONS preflight require authentication (§12).
+
+### 11.1 Routes
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness check. Unauthenticated. |
+| `GET` | `/auth/check` | Returns 200 iff the request's token is valid. |
+| `GET` | `/config` | Returns the public projection of `repos.json` and `agents.json` (names only; no absolute paths or commands). |
+| `GET` | `/sessions` | Lists sessions. Excludes `archived` by default; pass `?archived=1` to include them. |
+| `POST` | `/sessions` | Creates a session. Body: `{ repo, agent, prompt? }`. |
+| `GET` | `/sessions/events` | SSE stream of all session/event updates (for the dashboard list). `?after=<id>` resumes after a given event id. |
+| `GET` | `/sessions/:id` | Returns `{ session, events }` for one session. |
+| `GET` | `/sessions/:id/diff?base=branch\|uncommitted` | Returns the daemon-computed structured worktree diff for a non-archived session. Defaults to `branch`; returns `400 invalid_base`, `404` for unknown sessions, or `410 archived`. |
+| `GET` | `/sessions/:id/events` | SSE stream scoped to one session. `?after=<id>` resumes. |
+| `POST` | `/sessions/:id/messages` | Sends a follow-up. Body: `{ text }`. |
+| `POST` | `/sessions/:id/stop` | Stops the running agent (status → `stopped`). |
+| `POST` | `/sessions/:id/archive` | Archives the session (status → `archived`). Body: `{ force? }`. Returns 409 with `code: "dirty_worktree"` or `"unshared_commits"` when preconditions fail without `force`. |
+| `POST` | `/sessions/:id/pull-request` | Pushes the session branch and creates a GitHub PR via `gh`. Body: `{ title?, body? }`. Returns the updated `PublicSession` with `pull_request_url`, or `409` with `dirty_worktree`, `no_commits_ahead`, `gh_unavailable`, `non_github_remote`, `gh_failed`, or `archived`. |
+
+### 11.2 SSE event names
+
+Each SSE message uses a named event:
+
+- `event: session` — payload is a `Session` DTO. Emitted whenever a session row mutates.
+- `event: event` — payload is a `SessionEvent`. Emitted whenever a normalized event is appended.
+- `event: diff_changed` — live-only hint payload `{ kind: "diff_changed", sessionId }`; not persisted and not replayed.
+- `event: ping` — keep-alive comment frames every 15 s.
+
+Replay-on-connect: each SSE response first emits any persisted events with `id > after`, then attaches to the live bus. Implementations MUST NOT lose events that arrive between the snapshot and the live attach (subscribe before replay, dedupe by id).
+
+### 11.3 Browser-facing DTO
+
+All HTTP and SSE responses serialize sessions through a `PublicSession` projection that omits server-internal fields (absolute paths, runtime pids, adapter-specific thread ids). The full `Session` row is reachable only via direct in-process import of `@helm/daemon`. CLI-over-HTTP receives the public DTO. If a future operation legitimately requires server-internal fields, it MUST be served from a separately-named admin route, not by widening the public DTO.
+
+## 12. Authentication and Origin Allowlisting
+
+The daemon is a local code-execution surface (it spawns coding agents inside user repos with permissive flags). It MUST be protected against unauthorized access from the user's own browser tabs and from local processes that don't hold the token.
+
+### 12.1 Token
+
+On startup, the daemon ensures a per-installation secret token exists at `~/.helm/state/token` with mode `0600`. The daemon and any authorized CLI/dashboard read it from that path.
+
+Every authenticated route accepts the token via either:
+
+- `Authorization: Bearer <token>` header (HTTP requests).
+- `?token=<token>` query string (SSE; `EventSource` cannot set headers).
+
+Requests without a valid token return `401`.
+
+### 12.2 Origin allowlist
+
+For requests carrying an `Origin` header (i.e. browsers), the daemon checks that origin against an allowlist before token validation. The default allowlist is `http://localhost:3000` and `http://127.0.0.1:3000`; it can be replaced via `HELM_ALLOWED_ORIGINS` (comma-separated). Origins outside the allowlist are rejected with `403`.
+
+CORS responses echo only the matching allowed origin — never `*`.
+
+The allowlist is defense-in-depth; the token is the actual auth boundary.
+
+## 13. Out of Scope (MVP)
 
 - Remote / cloud execution targets.
-- GitHub API: PR creation, issue linking, push automation.
+- GitHub API: issue linking and direct API automation. PR creation is supported through the local `gh` CLI.
 - The desktop UI itself (this spec produces the substrate it consumes).
 - A manager-level chat across sessions.
 - Multi-user / multi-tenant.
 - Approval gates / pause-resume.
-- Diff review flows.
 - Adapters beyond `claude` and `codex`.
 - Tmux-based session durability (deferred; agents die with the owning Helm process).
 - `helm session attach` — depended on tmux; not in MVP.
 
-## 12. Open Questions
+## 14. Open Questions
 
-- IPC between daemon and desktop UI: HTTP+SSE over a local port (the plan's default) vs Unix-socket framing.
-- Worktree retention policy: auto-archive `completed` sessions after N days?
+- Worktree retention policy: auto-archive `stopped` or `completed` sessions after N days?
 - Branch push policy on `archive` — push `helm/<id>` to origin first, or just delete locally?
 - Should `helm session send` work while agent is mid-turn, or only in `awaiting_input`?
 - Concurrency cap on running sessions per repo (worktree creation is fine; CPU/disk pressure is the real limit).
+- Daemon restart durability: should sessions survive `helm daemon` restart? Currently agents die with the owning Helm process. Tmux or a process supervisor would address this.

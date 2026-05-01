@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-const schemaVersion = 1;
+const baseSchemaVersion = 1;
 
 type Migration = {
   version: number;
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL,
   last_assistant_message TEXT,
   last_event_at TEXT,
+  pull_request_url TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -43,13 +44,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `;
 
-const migrations: Migration[] = [];
+const migrations: Migration[] = [
+  {
+    version: 2,
+    apply: (db) => addColumnIfMissing(db, "sessions", "pull_request_url", "TEXT")
+  }
+];
 
 /** Applies the current schema and all unapplied migrations. */
 export function applyMigrations(db: Database): void {
   db.exec(schemaSql);
   db.exec(migrationTableSql);
-  markApplied(db, schemaVersion);
+  markApplied(db, baseSchemaVersion);
   for (const migration of migrations) {
     if (!isApplied(db, migration.version)) {
       migration.apply(db);

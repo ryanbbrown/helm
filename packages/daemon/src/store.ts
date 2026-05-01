@@ -41,6 +41,16 @@ export class Store {
 
   /** Updates mutable session fields. */
   updateSession(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at">>): void {
+    this.updateSessionFields(id, patch);
+  }
+
+  /** Persists the GitHub pull request URL for a session. */
+  updatePullRequestUrl(id: string, url: string): void {
+    this.updateSessionFields(id, { pull_request_url: url });
+  }
+
+  /** Updates mutable session columns and bumps updated_at. */
+  private updateSessionFields(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at" | "pull_request_url">>): void {
     const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
     if (entries.length === 0) {
       return;

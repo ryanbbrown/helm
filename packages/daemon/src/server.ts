@@ -1,6 +1,7 @@
-import { toPublicSession, toPublicSessionEvent, type SessionEvent } from "@helm/core";
+import { DiffBaseSchema, toPublicSession, toPublicSessionEvent, type SessionEvent } from "@helm/core";
 import { createDaemonToken } from "./auth";
 import { ArchiveSafetyError, SessionManager } from "./session-manager";
+import { PullRequestPreconditionError } from "./workspace/types";
 
 const DEFAULT_PORT = 7878;
 const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
@@ -19,6 +20,9 @@ export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), ma
           return json(request, { error: error.message, code: error.code, details: error.details }, error.status);
         }
         if (error instanceof ArchiveSafetyError) {
+          return json(request, { error: error.message, code: error.code, details: error.details }, 409);
+        }
+        if (error instanceof PullRequestPreconditionError) {
           return json(request, { error: error.message, code: error.code, details: error.details }, 409);
         }
         return json(request, { error: error instanceof Error ? error.message : String(error) }, 500);
@@ -65,8 +69,33 @@ async function route(request: Request, manager: SessionManager, token: string): 
       }
       return json(request, { session: toPublicSession(session), events: manager.listEvents(id).map(toPublicSessionEvent) });
     }
+    if (request.method === "GET" && parts[2] === "diff") {
+      const session = manager.get(id);
+      if (!session) {
+        return json(request, { error: "Not found" }, 404);
+      }
+      if (session.status === "archived") {
+        return json(request, { error: "Session archived", code: "archived" }, 410);
+      }
+      const base = DiffBaseSchema.safeParse(url.searchParams.get("base") ?? "branch");
+      if (!base.success) {
+        return json(request, { error: "Invalid diff base", code: "invalid_base" }, 400);
+      }
+      return json(request, await manager.diff(id, { base: base.data }));
+    }
     if (request.method === "GET" && parts[2] === "events") {
       return sessionStream(request, manager, id, Number(url.searchParams.get("after") ?? "0"));
+    }
+    if (request.method === "POST" && parts[2] === "pull-request") {
+      const session = manager.get(id);
+      if (!session) {
+        return json(request, { error: "Not found" }, 404);
+      }
+      if (session.status === "archived") {
+        return json(request, { error: "Session archived", code: "archived" }, 409);
+      }
+      const body = await pullRequestBody(request);
+      return json(request, await manager.createPullRequest(id, body));
     }
     if (request.method === "POST" && parts[2] === "messages") {
       const body = (await request.json()) as { text: string };
@@ -81,6 +110,14 @@ async function route(request: Request, manager: SessionManager, token: string): 
   }
 
   return json(request, { error: "Not found" }, 404);
+}
+
+/** Reads the optional pull request request body. */
+async function pullRequestBody(request: Request): Promise<{ title?: string; body?: string }> {
+  if (!request.headers.get("Content-Type")?.includes("application/json")) {
+    return {};
+  }
+  return (await request.json().catch(() => ({}))) as { title?: string; body?: string };
 }
 
 /** Reads the archive force flag from JSON body or legacy query string. */
@@ -167,6 +204,9 @@ function sessionEventsStream(request: Request, manager: SessionManager, afterId:
       if (event.type === "session") {
         send("session", toPublicSession(event.session));
       }
+      if (event.type === "hint") {
+        send(event.hint.kind, event.hint);
+      }
     });
     let lastSentId = afterId;
     for (const event of manager.listAllEvents(afterId)) {
@@ -198,6 +238,9 @@ function sessionStream(request: Request, manager: SessionManager, sessionId: str
       }
       if (event.type === "session" && event.session.id === sessionId) {
         send("session", toPublicSession(event.session));
+      }
+      if (event.type === "hint" && event.hint.sessionId === sessionId) {
+        send(event.hint.kind, event.hint);
       }
     });
     let lastSentId = afterId;

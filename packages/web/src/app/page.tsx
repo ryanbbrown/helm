@@ -20,6 +20,7 @@ export default function Page() {
   const [repoName, setRepoName] = useState("");
   const [agentName, setAgentName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [diffRefreshToken, setDiffRefreshToken] = useState(0);
   const [starting, setStarting] = useState(false);
   const selected = useMemo(() => sessions.find((session) => session.id === selectedId) ?? null, [selectedId, sessions]);
 
@@ -39,6 +40,7 @@ export default function Page() {
     });
   }, []);
   const ignoreGlobalEvent = useCallback(() => undefined, []);
+  const markDiffChanged = useCallback(() => setDiffRefreshToken((current) => current + 1), []);
 
   const refresh = useCallback(async () => {
     try {
@@ -79,7 +81,7 @@ export default function Page() {
   }, [mergeSession, selectedId]);
 
   useAllSessionsStream(mergeSession, ignoreGlobalEvent);
-  useSessionEvents(selectedId, mergeSession, mergeEvent);
+  useSessionEvents(selectedId, mergeSession, mergeEvent, markDiffChanged);
 
   /** Creates a new session from form data. */
   async function onCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -176,7 +178,15 @@ export default function Page() {
       </aside>
       <section className="main">
         {selected ? (
-          <SessionDetail session={selected} events={events} onRefresh={refresh} onSend={onSend} onStop={() => void onStop()} />
+          <SessionDetail
+            session={selected}
+            events={events}
+            diffRefreshToken={diffRefreshToken}
+            onRefresh={refresh}
+            onSend={onSend}
+            onStop={() => void onStop()}
+            onSessionUpdate={mergeSession}
+          />
         ) : (
           <>
             <Header session={null} onRefresh={refresh} onStop={() => undefined} />

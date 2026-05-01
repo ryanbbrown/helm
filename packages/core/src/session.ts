@@ -20,6 +20,7 @@ export type Session = {
   status: SessionStatus;
   last_assistant_message: string | null;
   last_event_at: string | null;
+  pull_request_url: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -48,6 +49,7 @@ export function toPublicSession(session: Session): PublicSession {
     status: session.status,
     last_assistant_message: session.last_assistant_message,
     last_event_at: session.last_event_at,
+    pull_request_url: session.pull_request_url,
     created_at: session.created_at,
     updated_at: session.updated_at
   };
