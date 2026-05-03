@@ -4,6 +4,7 @@ export type RunnerSpawnOptions = {
   command: string;
   cwd: string;
   extraArgs: string[];
+  sessionId?: string;
   initialPrompt?: string;
   resumeThreadId?: string;
   logPath: string;

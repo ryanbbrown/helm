@@ -1,4 +1,5 @@
 import type { NormalizedEvent, PublicNormalizedEvent, SessionEventKind } from "./events";
+import type { ManagerMode } from "./manager";
 
 export type SessionStatus =
   | "created"
@@ -13,8 +14,11 @@ export type Session = {
   id: string;
   repo_name: string;
   agent_name: string;
-  branch: string;
-  worktree_path: string;
+  branch: string | null;
+  worktree_path: string | null;
+  workspace_uri: string | null;
+  parent_session_id: string | null;
+  manager_mode: ManagerMode | null;
   agent_thread_id: string | null;
   pid: number | null;
   status: SessionStatus;
@@ -25,7 +29,7 @@ export type Session = {
   updated_at: string;
 };
 
-export type PublicSession = Omit<Session, "worktree_path" | "agent_thread_id" | "pid">;
+export type PublicSession = Omit<Session, "worktree_path" | "workspace_uri" | "agent_thread_id" | "pid">;
 
 export type SessionEvent = {
   id: number;
@@ -46,6 +50,8 @@ export function toPublicSession(session: Session): PublicSession {
     repo_name: session.repo_name,
     agent_name: session.agent_name,
     branch: session.branch,
+    parent_session_id: session.parent_session_id,
+    manager_mode: session.manager_mode,
     status: session.status,
     last_assistant_message: session.last_assistant_message,
     last_event_at: session.last_event_at,
@@ -57,6 +63,15 @@ export function toPublicSession(session: Session): PublicSession {
 
 /** Removes local-only fields from a session event row. */
 export function toPublicSessionEvent(event: SessionEvent): PublicSessionEvent {
+  if (event.payload.kind === "tool_result") {
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        result: truncatePublicPayload(event.payload.result)
+      }
+    };
+  }
   if (event.payload.kind !== "session_started") {
     return event as PublicSessionEvent;
   }
@@ -65,4 +80,18 @@ export function toPublicSessionEvent(event: SessionEvent): PublicSessionEvent {
     ...event,
     payload
   };
+}
+
+/** Truncates large public event payload fields. */
+function truncatePublicPayload(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.length > 4096 ? `${value.slice(0, 4096)}...` : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(truncatePublicPayload);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, truncatePublicPayload(entry)]));
+  }
+  return value;
 }

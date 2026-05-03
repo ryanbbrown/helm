@@ -31,28 +31,33 @@ import {
 
 export class LocalWorktreeProvider implements WorkspaceProvider {
   /** Creates a local git worktree for a new session. */
-  async create({ repo, sessionId }: WorkspaceCreateOptions): Promise<WorkspaceHandle> {
-    const branch = `helm/${sessionId}`;
+  async create({ repo, sessionId, branchName, sourceRef }: WorkspaceCreateOptions): Promise<WorkspaceHandle> {
+    const branch = branchName ?? `helm/${sessionId}`;
     const path = worktreePath(repo.name, sessionId);
     await fetchOrigin(repo.path);
     mkdirSync(dirname(path), { recursive: true });
-    await createWorktree(repo.path, branch, path, repo.default_branch);
-    return { uri: `file://${path}`, cwd: path, branch };
+    await createWorktree(repo.path, branch, path, sourceRef ?? `origin/${repo.default_branch}`);
+    return { kind: "local", uri: `file://${path}`, cwd: path, branch };
   }
 
   /** Reconstructs a local worktree handle from a persisted session. */
   fromSession({ session }: WorkspaceSessionOptions): WorkspaceHandle {
-    return { uri: `file://${session.worktree_path}`, cwd: session.worktree_path, branch: session.branch };
+    if (!session.worktree_path || !session.branch) {
+      throw new Error(`Session has no local workspace: ${session.id}`);
+    }
+    return { kind: "local", uri: session.workspace_uri ?? `file://${session.worktree_path}`, cwd: session.worktree_path, branch: session.branch };
   }
 
   /** Removes a local worktree and its local branch. */
   async remove(handle: WorkspaceHandle, { repo }: WorkspaceRemoveOptions): Promise<void> {
+    assertLocalHandle(handle);
     await removeWorktree(repo.path, handle.cwd);
     await deleteBranch(repo.path, handle.branch);
   }
 
   /** Refuses removal if the local worktree has dirty or unshared work. */
   async assertRemoveSafe(handle: WorkspaceHandle, { repo }: WorkspaceSafetyOptions): Promise<void> {
+    assertLocalHandle(handle);
     const dirty = await worktreeStatus(handle.cwd);
     if (dirty) {
       throw new ArchiveSafetyError("dirty_worktree", dirty);
@@ -65,6 +70,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
 
   /** Reads the current worktree diff for a session. */
   async diff(handle: WorkspaceHandle, { repo, base, fileSizeLimit, fileCountLimit }: WorkspaceDiffOptions) {
+    assertLocalHandle(handle);
     const diff = await gitDiff(handle.cwd, { base, defaultBranch: repo.default_branch, fileSizeLimit, fileCountLimit });
     const result = {
       base,
@@ -79,6 +85,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
 
   /** Pushes the session branch and opens a GitHub pull request. */
   async createPullRequest(handle: WorkspaceHandle, { repo, title, body }: WorkspacePullRequestOptions) {
+    assertLocalHandle(handle);
     const dirty = await worktreeStatus(handle.cwd);
     if (dirty) {
       throw new PullRequestPreconditionError({ code: "dirty_worktree", details: dirty });
@@ -102,6 +109,13 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     } catch (error) {
       throw new PullRequestPreconditionError({ code: "gh_failed", details: error instanceof Error ? error.message : String(error) });
     }
+  }
+}
+
+/** Narrows a workspace handle to a local git worktree. */
+function assertLocalHandle(handle: WorkspaceHandle): asserts handle is Extract<WorkspaceHandle, { kind: "local" }> {
+  if (handle.kind !== "local") {
+    throw new Error("Local workspace required");
   }
 }
 

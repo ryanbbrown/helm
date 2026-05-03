@@ -7,7 +7,8 @@ import { applyMigrations } from "./migrations";
 type SessionRow = Omit<Session, "pid"> & { pid: number | null };
 type EventRow = Omit<SessionEvent, "payload"> & { payload: string };
 
-export type NewSession = Pick<Session, "id" | "repo_name" | "agent_name" | "branch" | "worktree_path" | "status" | "created_at" | "updated_at">;
+export type NewSession = Pick<Session, "id" | "repo_name" | "agent_name" | "branch" | "worktree_path" | "status" | "created_at" | "updated_at">
+  & Partial<Pick<Session, "workspace_uri" | "parent_session_id" | "manager_mode">>;
 
 export class Store {
   private db: Database;
@@ -24,8 +25,8 @@ export class Store {
     this.db
       .query(
         `INSERT INTO sessions
-         (id, repo_name, agent_name, branch, worktree_path, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, repo_name, agent_name, branch, worktree_path, workspace_uri, parent_session_id, manager_mode, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         session.id,
@@ -33,6 +34,9 @@ export class Store {
         session.agent_name,
         session.branch,
         session.worktree_path,
+        session.workspace_uri ?? (session.worktree_path ? `file://${session.worktree_path}` : null),
+        session.parent_session_id ?? null,
+        session.manager_mode ?? null,
         session.status,
         session.created_at,
         session.updated_at
@@ -40,7 +44,7 @@ export class Store {
   }
 
   /** Updates mutable session fields. */
-  updateSession(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at">>): void {
+  updateSession(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at" | "manager_mode">>): void {
     this.updateSessionFields(id, patch);
   }
 
@@ -50,7 +54,10 @@ export class Store {
   }
 
   /** Updates mutable session columns and bumps updated_at. */
-  private updateSessionFields(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at" | "pull_request_url">>): void {
+  private updateSessionFields(
+    id: string,
+    patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at" | "pull_request_url" | "manager_mode">>
+  ): void {
     const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
     if (entries.length === 0) {
       return;
@@ -80,6 +87,20 @@ export class Store {
   listSessions(includeArchived = false): Session[] {
     const sql = includeArchived ? "SELECT * FROM sessions ORDER BY created_at DESC" : "SELECT * FROM sessions WHERE status != 'archived' ORDER BY created_at DESC";
     return this.db.query<SessionRow, []>(sql).all().map(parseSession);
+  }
+
+  /** Lists sessions owned by a parent session. */
+  listChildSessions(parentSessionId: string, includeArchived = false): Session[] {
+    const sql = includeArchived
+      ? "SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC"
+      : "SELECT * FROM sessions WHERE parent_session_id = ? AND status != 'archived' ORDER BY created_at DESC";
+    return this.db.query<SessionRow, [string]>(sql).all(parentSessionId).map(parseSession);
+  }
+
+  /** Finds the current non-archived manager session if one exists. */
+  getActiveManagerSession(): Session | null {
+    const row = this.db.query<SessionRow, []>("SELECT * FROM sessions WHERE manager_mode IS NOT NULL AND status != 'archived' ORDER BY created_at DESC LIMIT 1").get();
+    return row ? parseSession(row) : null;
   }
 
   /** Reads one session by id. */

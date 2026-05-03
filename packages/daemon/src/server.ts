@@ -25,6 +25,10 @@ export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), ma
         if (error instanceof PullRequestPreconditionError) {
           return json(request, { error: error.message, code: error.code, details: error.details }, 409);
         }
+        if (error instanceof Error && ["manager_exists", "nested_manager_forbidden", "parent_not_manager", "not_manager", "manager_not_running", "tool_call_not_found"].includes(error.message)) {
+          const status = error.message === "tool_call_not_found" ? 404 : 409;
+          return json(request, { error: error.message, code: error.message }, status);
+        }
         return json(request, { error: error instanceof Error ? error.message : String(error) }, 500);
       }
     }
@@ -50,11 +54,26 @@ async function route(request: Request, manager: SessionManager, token: string): 
   if (request.method === "GET" && url.pathname === "/config") {
     return json(request, await manager.getPublicConfig());
   }
+  if (request.method === "GET" && url.pathname === "/manager") {
+    const session = manager.getManager();
+    return session ? json(request, toPublicSession(session)) : json(request, { error: "Not found" }, 404);
+  }
   if (request.method === "GET" && url.pathname === "/sessions") {
-    return json(request, manager.list(url.searchParams.get("archived") === "1").map(toPublicSession));
+    const parent = url.searchParams.get("parent");
+    const sessions = parent ? manager.listChildren(parent, url.searchParams.get("archived") === "1") : manager.list(url.searchParams.get("archived") === "1");
+    return json(request, sessions.map(toPublicSession));
   }
   if (request.method === "POST" && url.pathname === "/sessions") {
-    const body = (await request.json()) as { repo: string; agent: string; prompt?: string };
+    const body = (await request.json()) as {
+      repo: string;
+      agent: string;
+      prompt?: string;
+      parent_session_id?: string;
+      manager_mode?: "approval" | "autopilot";
+      source_session_id?: string;
+      source_branch?: string;
+      branch_name?: string;
+    };
     return json(request, toPublicSession(await manager.create(body)), 201);
   }
   if (request.method === "GET" && url.pathname === "/sessions/events") {
@@ -101,6 +120,21 @@ async function route(request: Request, manager: SessionManager, token: string): 
       const body = (await request.json()) as { text: string };
       return json(request, toPublicSession(await manager.send(id, body.text)));
     }
+    if (request.method === "PATCH" && parts[2] === "manager-mode") {
+      const body = (await request.json()) as { manager_mode: "approval" | "autopilot" };
+      if (body.manager_mode !== "approval" && body.manager_mode !== "autopilot") {
+        return json(request, { error: "Invalid manager mode", code: "invalid_manager_mode" }, 400);
+      }
+      return json(request, toPublicSession(manager.setManagerMode(id, body.manager_mode)));
+    }
+    if (request.method === "POST" && parts[2] === "tool-calls" && parts[3] && parts[4] === "approve") {
+      manager.approveToolCall(id, parts[3]);
+      return json(request, { ok: true });
+    }
+    if (request.method === "POST" && parts[2] === "tool-calls" && parts[3] && parts[4] === "deny") {
+      manager.denyToolCall(id, parts[3]);
+      return json(request, { ok: true });
+    }
     if (request.method === "POST" && parts[2] === "stop") {
       return json(request, toPublicSession(await manager.stop(id)));
     }
@@ -145,7 +179,7 @@ function corsHeaders(request: Request): HeadersInit {
   const origin = request.headers.get("Origin");
   const headers: Record<string, string> = {
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS"
   };
   if (origin && allowedOrigins().includes(origin)) {
     headers["Access-Control-Allow-Origin"] = origin;

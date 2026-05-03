@@ -43,5 +43,11 @@ describe("migrations", () => {
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(sessions)").all().map((row) => row.name);
     expect(columns).toContain("pull_request_url");
     expect(db.query<{ version: number }, []>("SELECT version FROM schema_migrations WHERE version = 2").get()?.version).toBe(2);
+    expect(db.query<{ version: number }, []>("SELECT version FROM schema_migrations WHERE version = 3").get()?.version).toBe(3);
+    const info = db.query<{ name: string; notnull: number }, []>("PRAGMA table_info(sessions)").all();
+    expect(info.find((row) => row.name === "worktree_path")?.notnull).toBe(0);
+    expect(columns).toContain("workspace_uri");
+    expect(columns).toContain("parent_session_id");
+    expect(columns).toContain("manager_mode");
   });
 });

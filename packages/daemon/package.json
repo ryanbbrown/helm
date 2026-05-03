@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@helm/core": "workspace:*",
+    "openai": "^6.35.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

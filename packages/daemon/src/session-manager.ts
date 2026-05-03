@@ -12,12 +12,15 @@ import {
   type SessionEvent
 } from "@helm/core";
 import { findAgent, findRepo, loadConfig, type HelmConfig } from "./config-loader";
+import { gitRefExists } from "./git";
 import { Store } from "./store";
 import { createRunnerAdapter } from "./runner";
 import type { RunnerHandle } from "./runner/types";
 import { EventBus, type BusEvent } from "./event-bus";
 import { LocalWorktreeProvider } from "./workspace/local";
+import { NullWorkspaceProvider } from "./workspace/null";
 import type { WorkspaceProvider } from "./workspace/types";
+import type { ManagerMode } from "@helm/core";
 
 export { ArchiveSafetyError } from "./workspace/types";
 
@@ -33,6 +36,11 @@ export type CreateSessionInput = {
   repo: string;
   agent: string;
   prompt?: string;
+  parent_session_id?: string | null;
+  manager_mode?: ManagerMode;
+  source_session_id?: string;
+  source_branch?: string;
+  branch_name?: string;
 };
 
 export type PublicHelmConfig = {
@@ -53,6 +61,7 @@ export class SessionManager {
   private store: Store;
   private bus: EventBus;
   private workspace: WorkspaceProvider;
+  private nullWorkspace = new NullWorkspaceProvider();
   private handles = new Map<string, RunnerHandle>();
   private cachedConfig?: HelmConfig;
   private configDir?: string;
@@ -71,8 +80,36 @@ export class SessionManager {
     const config = await this.loadHelmConfig();
     const repo = findRepo(config, input.repo);
     const agent = findAgent(config, input.agent);
+    if (agent.headless_mode === "manager_loop" && this.store.getActiveManagerSession()) {
+      throw new Error("manager_exists");
+    }
+    if (input.parent_session_id) {
+      const parent = this.getRequired(input.parent_session_id);
+      if (parent.manager_mode === null) {
+        throw new Error("parent_not_manager");
+      }
+      if (agent.headless_mode === "manager_loop") {
+        throw new Error("nested_manager_forbidden");
+      }
+    }
+    if (input.source_session_id && input.source_branch) {
+      throw new Error("ambiguous_source");
+    }
+    const source = input.source_session_id ? this.getRequired(input.source_session_id) : null;
+    if (source) {
+      if (source.repo_name !== repo.name) {
+        throw new Error("source_repo_mismatch");
+      }
+      if (!source.branch || source.manager_mode || source.status === "archived") {
+        throw new Error("invalid_source_session");
+      }
+    }
+    if (input.source_branch && !(await gitRefExists(repo.path, input.source_branch))) {
+      throw new Error("unknown_branch");
+    }
     const id = createId();
-    const workspace = await this.workspace.create({ repo, sessionId: id });
+    const provider = agent.headless_mode === "manager_loop" ? this.nullWorkspace : this.workspace;
+    const workspace = await provider.create({ repo, sessionId: id, branchName: input.branch_name, sourceRef: source?.branch ?? input.source_branch ?? undefined });
     const now = new Date().toISOString();
 
     this.store.insertSession({
@@ -81,6 +118,9 @@ export class SessionManager {
       agent_name: agent.name,
       branch: workspace.branch,
       worktree_path: workspace.cwd,
+      workspace_uri: workspace.uri,
+      parent_session_id: input.parent_session_id ?? null,
+      manager_mode: agent.headless_mode === "manager_loop" ? input.manager_mode ?? "approval" : null,
       status: "created",
       created_at: now,
       updated_at: now
@@ -96,13 +136,19 @@ export class SessionManager {
       this.persistEvent(id, { kind: "user_message", text: input.prompt });
     }
 
-    const adapter = createRunnerAdapter(agent);
+    const adapter = createRunnerAdapter(agent, {
+      managerContext: agent.headless_mode === "manager_loop" ? { manager: this, managerSessionId: id } : undefined
+    });
+    if (agent.headless_mode !== "manager_loop" && workspace.kind !== "local") {
+      throw new Error("local workspace required");
+    }
     const handle = adapter.spawn({
       command: agent.command,
-      cwd: workspace.cwd,
+      cwd: workspace.cwd ?? "",
       extraArgs: agent.args,
       initialPrompt: input.prompt,
       logPath: logPath(id),
+      sessionId: id,
       onThreadId: (threadId) => this.patch(id, { agent_thread_id: threadId })
     });
     this.handles.set(id, handle);
@@ -171,16 +217,17 @@ export class SessionManager {
     const config = await this.loadHelmConfig();
     const session = this.getRequired(id);
     const repo = findRepo(config, session.repo_name);
-    const workspace = this.workspace.fromSession({ repo, session });
+    const provider = session.manager_mode ? this.nullWorkspace : this.workspace;
+    const workspace = provider.fromSession({ repo, session });
     if (!options.force) {
-      await this.workspace.assertRemoveSafe(workspace, { repo });
+      await provider.assertRemoveSafe(workspace, { repo });
     }
     const handle = this.handles.get(id);
     if (handle) {
       await handle.stop();
       this.handles.delete(id);
     }
-    await this.workspace.remove(workspace, { repo, force: options.force ?? false });
+    await provider.remove(workspace, { repo, force: options.force ?? false });
     this.patch(id, { status: "archived", pid: null });
     return this.getRequired(id);
   }
@@ -189,6 +236,9 @@ export class SessionManager {
   async diff(id: string, opts: { base: DiffBase }): Promise<DiffResult> {
     const config = await this.loadHelmConfig();
     const session = this.getRequired(id);
+    if (session.manager_mode) {
+      throw new Error("is_manager_session");
+    }
     const repo = findRepo(config, session.repo_name);
     const workspace = this.workspace.fromSession({ repo, session });
     return this.workspace.diff(workspace, {
@@ -220,6 +270,36 @@ export class SessionManager {
   /** Lists sessions. */
   list(includeArchived = false): Session[] {
     return this.store.listSessions(includeArchived);
+  }
+
+  /** Lists non-archived children for one manager session. */
+  listChildren(parentSessionId: string, includeArchived = false): Session[] {
+    return this.store.listChildSessions(parentSessionId, includeArchived);
+  }
+
+  /** Reads the current active manager session. */
+  getManager(): Session | null {
+    return this.store.getActiveManagerSession();
+  }
+
+  /** Updates a manager session mode. */
+  setManagerMode(id: string, mode: ManagerMode): Session {
+    const session = this.getRequired(id);
+    if (!session.manager_mode) {
+      throw new Error("not_manager");
+    }
+    this.patch(id, { manager_mode: mode });
+    return this.getRequired(id);
+  }
+
+  /** Approves one pending manager tool call. */
+  approveToolCall(id: string, toolCallId: string): void {
+    this.resolveToolCall(id, toolCallId, true);
+  }
+
+  /** Denies one pending manager tool call. */
+  denyToolCall(id: string, toolCallId: string): void {
+    this.resolveToolCall(id, toolCallId, false);
   }
 
   /** Lists persisted events for one session. */
@@ -293,11 +373,23 @@ export class SessionManager {
   }
 
   /** Patches a session and publishes the resulting row. */
-  private patch(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at">>): void {
+  private patch(id: string, patch: Partial<Pick<Session, "agent_thread_id" | "pid" | "status" | "last_assistant_message" | "last_event_at" | "manager_mode">>): void {
     this.store.updateSession(id, patch);
     const session = this.get(id);
     if (session) {
       this.bus.publish({ type: "session", session });
+    }
+  }
+
+  /** Resolves a pending tool call on a live manager handle. */
+  private resolveToolCall(id: string, toolCallId: string, approved: boolean): void {
+    const handle = this.handles.get(id);
+    if (!handle || !("resolveToolCall" in handle) || typeof handle.resolveToolCall !== "function") {
+      throw new Error("manager_not_running");
+    }
+    const resolved = handle.resolveToolCall(toolCallId, approved);
+    if (!resolved) {
+      throw new Error("tool_call_not_found");
     }
   }
 

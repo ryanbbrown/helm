@@ -20,13 +20,18 @@ export class DaemonClient {
   }
 
   /** Creates a session through the daemon. */
-  async create(repo: string, agent: string, prompt?: string): Promise<PublicSession> {
-    return this.request("/sessions", { method: "POST", body: JSON.stringify({ repo, agent, prompt }) });
+  async create(repo: string, agent: string, prompt?: string, options: { manager_mode?: "approval" | "autopilot"; parent_session_id?: string } = {}): Promise<PublicSession> {
+    return this.request("/sessions", { method: "POST", body: JSON.stringify({ repo, agent, prompt, ...options }) });
   }
 
   /** Lists daemon sessions. */
-  async list(): Promise<PublicSession[]> {
-    return this.request("/sessions");
+  async list(parent?: string): Promise<PublicSession[]> {
+    return this.request(parent ? `/sessions?parent=${encodeURIComponent(parent)}` : "/sessions");
+  }
+
+  /** Reads the singleton manager session. */
+  async manager(): Promise<PublicSession> {
+    return this.request("/manager");
   }
 
   /** Reads one daemon session and its events. */
@@ -47,6 +52,21 @@ export class DaemonClient {
   /** Archives a daemon session. */
   async archive(id: string, force = false): Promise<PublicSession> {
     return this.request(`/sessions/${id}/archive`, { method: "POST", body: JSON.stringify({ force }) });
+  }
+
+  /** Updates a manager's operating mode. */
+  async setManagerMode(id: string, manager_mode: "approval" | "autopilot"): Promise<PublicSession> {
+    return this.request(`/sessions/${id}/manager-mode`, { method: "PATCH", body: JSON.stringify({ manager_mode }) });
+  }
+
+  /** Approves one manager tool call. */
+  async approveToolCall(id: string, toolCallId: string): Promise<void> {
+    await this.request(`/sessions/${id}/tool-calls/${toolCallId}/approve`, { method: "POST" });
+  }
+
+  /** Denies one manager tool call. */
+  async denyToolCall(id: string, toolCallId: string): Promise<void> {
+    await this.request(`/sessions/${id}/tool-calls/${toolCallId}/deny`, { method: "POST" });
   }
 
   /** Streams session events through SSE. */

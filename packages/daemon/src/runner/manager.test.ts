@@ -1,0 +1,115 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
+import { ManagerRunnerAdapter, type ManagerRunnerHandle } from "./manager";
+import { SessionManager } from "../session-manager";
+import { Store } from "../store";
+import type { AgentConfig, NormalizedEvent } from "@helm/core";
+import type { ManagerChatClient, ManagerChatCompletion, ManagerChatCompletionInput } from "./openrouter";
+import type { HelmConfig } from "../config-loader";
+
+describe("ManagerRunnerAdapter", () => {
+  test("gates tool calls in approval mode and appends tool results", async () => {
+    const fixture = createLoopFixture();
+    const client = new FakeManagerChatClient([
+      {
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call-1", type: "function", function: { name: "missing_tool", arguments: "{}" } }]
+        },
+        finishReason: "tool_calls"
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" }
+    ]);
+    const handle = new ManagerRunnerAdapter(fixture.agent, { manager: fixture.manager, managerSessionId: "manager" }, client).spawn({
+      command: "manager",
+      cwd: "",
+      extraArgs: [],
+      initialPrompt: "start",
+      logPath: join(fixture.dir, "manager.jsonl")
+    }) as ManagerRunnerHandle;
+
+    const invocation = await nextEvent(handle.events);
+    expect(invocation).toMatchObject({ kind: "tool_invocation", toolCallId: "call-1", status: "pending" });
+    expect(handle.resolveToolCall("call-1", true)).toBe(true);
+
+    const rest = await collectUntil(handle.events, "turn_complete");
+    expect(rest).toContainEqual(expect.objectContaining({ kind: "tool_call_resolved", approved: true }));
+    expect(rest).toContainEqual(expect.objectContaining({ kind: "tool_result", ok: false, errorMessage: "unknown_tool" }));
+    expect(rest).toContainEqual(expect.objectContaining({ kind: "assistant_message", text: "done" }));
+    expect(client.calls).toHaveLength(2);
+    expect(client.calls[1]?.messages.at(-1)).toMatchObject({ role: "tool" });
+  });
+});
+
+/** Reads the next runner event. */
+async function nextEvent(events: AsyncIterable<NormalizedEvent>): Promise<NormalizedEvent> {
+  const iterator = events[Symbol.asyncIterator]();
+  const value = await iterator.next();
+  if (value.done) {
+    throw new Error("events closed");
+  }
+  return value.value;
+}
+
+/** Collects events until a specific event kind appears. */
+async function collectUntil(events: AsyncIterable<NormalizedEvent>, kind: NormalizedEvent["kind"]): Promise<NormalizedEvent[]> {
+  const collected: NormalizedEvent[] = [];
+  for await (const event of events) {
+    collected.push(event);
+    if (event.kind === kind) {
+      return collected;
+    }
+  }
+  return collected;
+}
+
+type LoopFixture = {
+  agent: AgentConfig;
+  dir: string;
+  manager: SessionManager;
+};
+
+/** Creates a manager session row and fake manager config. */
+function createLoopFixture(): LoopFixture {
+  const dir = mkdtempSync(join(tmpdir(), "helm-manager-loop-"));
+  const store = new Store(join(dir, "helm.db"));
+  const now = new Date().toISOString();
+  store.insertSession({
+    id: "manager",
+    repo_name: "fixture",
+    agent_name: "manager",
+    branch: null,
+    worktree_path: null,
+    workspace_uri: null,
+    manager_mode: "approval",
+    status: "running",
+    created_at: now,
+    updated_at: now
+  });
+  const agent: AgentConfig = { name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key_env: "OPENROUTER_API_KEY" };
+  const config: HelmConfig = {
+    repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+    agents: [agent]
+  };
+  return { agent, dir, manager: new SessionManager({ config, store }) };
+}
+
+class FakeManagerChatClient implements ManagerChatClient {
+  calls: ManagerChatCompletionInput[] = [];
+
+  /** Creates a fake client with queued responses. */
+  constructor(private responses: ManagerChatCompletion[]) {}
+
+  /** Returns the next queued manager completion. */
+  async chatCompletion(input: ManagerChatCompletionInput): Promise<ManagerChatCompletion> {
+    this.calls.push({ ...input, messages: [...input.messages] });
+    const response = this.responses.shift();
+    if (!response) {
+      throw new Error("No fake response queued");
+    }
+    return response;
+  }
+}

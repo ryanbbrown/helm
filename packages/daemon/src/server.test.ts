@@ -233,12 +233,12 @@ class FakeWorkspaceProvider implements WorkspaceProvider {
 
   /** Creates an unused fake workspace. */
   async create(_options: WorkspaceCreateOptions): Promise<WorkspaceHandle> {
-    return { uri: "file:///tmp/fake", cwd: "/tmp/fake", branch: "helm/fake" };
+    return { kind: "local", uri: "file:///tmp/fake", cwd: "/tmp/fake", branch: "helm/fake" };
   }
 
   /** Reconstructs a fake workspace from the session row. */
   fromSession({ session }: WorkspaceSessionOptions): WorkspaceHandle {
-    return { uri: `file://${session.worktree_path}`, cwd: session.worktree_path, branch: session.branch };
+    return { kind: "local", uri: `file://${session.worktree_path}`, cwd: session.worktree_path ?? "/tmp/fake", branch: session.branch ?? "helm/fake" };
   }
 
   /** Removes an unused fake workspace. */

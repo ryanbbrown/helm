@@ -15,11 +15,11 @@ export function SessionList({ sessions, selectedId, onSelect }: SessionListProps
       {sessions.map((session) => (
         <button key={session.id} className={`session-row ${selectedId === session.id ? "active" : ""}`} type="button" onClick={() => onSelect(session.id)}>
           <div className="row-top">
-            <strong>{session.repo_name}</strong>
+            <strong>{session.manager_mode ? "manager" : session.repo_name}</strong>
             <StatusBadge status={session.status} />
           </div>
           <div className="branch">{session.branch}</div>
-          <div className="muted">{session.agent_name}</div>
+          <div className="muted">{session.agent_name}{session.parent_session_id ? " · child" : ""}</div>
         </button>
       ))}
     </div>

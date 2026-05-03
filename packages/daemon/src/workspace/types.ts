@@ -1,14 +1,26 @@
 import type { DiffBase, DiffResult, PullRequestError, PullRequestResult, RepoConfig, Session } from "@helm/core";
 
-export type WorkspaceHandle = {
+export type LocalWorkspaceHandle = {
+  kind: "local";
   uri: string;
   cwd: string;
   branch: string;
 };
 
+export type NullWorkspaceHandle = {
+  kind: "none";
+  uri: null;
+  cwd: null;
+  branch: null;
+};
+
+export type WorkspaceHandle = LocalWorkspaceHandle | NullWorkspaceHandle;
+
 export type WorkspaceCreateOptions = {
   repo: RepoConfig;
   sessionId: string;
+  branchName?: string;
+  sourceRef?: string;
 };
 
 export type WorkspaceSessionOptions = {

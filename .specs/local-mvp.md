@@ -150,7 +150,11 @@ The runner adapter owns the headless flags (see §7.2).
 | `name` | string | Slug |
 | `command` | string | Executable name or path |
 | `args` | string[] | Extra flags passed after headless flags |
-| `headless_mode` | enum | `claude_stream_json` \| `codex_exec` |
+| `headless_mode` | enum | `claude_stream_json` \| `codex_exec` \| `manager_loop` |
+| `model` | string? | Required for `manager_loop`; OpenRouter model id |
+| `api_key_env` | string? | Required for `manager_loop`; environment variable containing the OpenRouter key |
+| `system_prompt_path` | string? | Optional markdown file appended to the built-in manager system prompt |
+| `manager_limits` | object? | Optional caps for manager loop iterations, tool calls, queued wakes, and live children |
 
 #### 5.1.3 `Session` (persisted in SQLite)
 
@@ -159,8 +163,11 @@ The runner adapter owns the headless flags (see §7.2).
 | `id` | text PK | ULID |
 | `repo_name` | text | FK to `repos.json` entry |
 | `agent_name` | text | FK to `agents.json` entry |
-| `branch` | text | e.g. `helm/<id>` |
-| `worktree_path` | text | Absolute path |
+| `branch` | text? | e.g. `helm/<id>`; null for manager sessions |
+| `worktree_path` | text? | Absolute path; null for manager sessions |
+| `workspace_uri` | text? | Provider workspace URI; null for manager sessions |
+| `parent_session_id` | text? | Set when a manager spawns a child; null otherwise |
+| `manager_mode` | enum? | null for normal sessions; `approval` or `autopilot` for manager sessions, default `approval` |
 | `agent_thread_id` | text? | Adapter-supplied thread/session id used for resume (e.g. Claude SDK `session_id`, Codex `thread.id`) |
 | `pid` | int? | Agent process pid (null when not running) |
 | `status` | enum | `created` \| `running` \| `awaiting_input` \| `completed` \| `failed` \| `stopped` \| `archived` |
@@ -316,11 +323,15 @@ The runner translates adapter-specific events into a shared `SessionEvent` shape
 | `user_message` | ✓ | Initial prompt and follow-up messages sent by the user |
 | `thinking` | ✓ (as indicator) | Emitted on first non-result delta after a user msg |
 | `assistant_message` | ✓ | Final, post-turn assistant text. Only this is shown. |
+| `tool_invocation` | ✓ for manager sessions | Manager tool call requested; `status` is `pending` in approval mode or `auto` in autopilot |
+| `tool_call_resolved` | ✓ for manager sessions | User approved or denied a pending manager tool call |
+| `tool_result` | ✓ for manager sessions | Result returned to the manager LLM for a tool call |
+| `child_event` | ✓ for manager sessions | Manager-observed child spawn/message/stop/notice/error |
 | `turn_complete` | ✓ (status flip) | Triggers `running → awaiting_input` |
 | `error` | ✓ | Surfaces failure to UI |
 | `exit` | ✓ | Process exited |
 
-The MVP UI contract is: **show `session_started`, `user_message`, `thinking`, `assistant_message`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas and adapter-specific tool events are kept in the raw JSONL log, not persisted as normalized timeline events; only the final assistant message of each turn is surfaced.
+The MVP UI contract is: **show `session_started`, `user_message`, `thinking`, `assistant_message`, manager tool events, `child_event`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas and adapter-specific tool events are kept in the raw JSONL log, not persisted as normalized timeline events; only the final assistant message of each turn is surfaced.
 
 `diff_changed` is a live-only SSE hint that tells the UI the worktree diff for a session may have changed. It carries no payload beyond `{ kind: "diff_changed", sessionId }`, is not persisted as a normalized event, and is not replayed from SQLite.
 
@@ -347,6 +358,31 @@ interface RunnerHandle {
 ```
 
 The session manager consumes `events`, persists them, and never branches on which agent is running.
+
+### 7.5 `manager_loop` Adapter
+
+`manager_loop` is an in-process `RunnerAdapter` backed by the OpenAI SDK pointed at OpenRouter (`https://openrouter.ai/api/v1`). It is configured by an agent entry with `model`, `api_key_env`, optional `system_prompt_path`, and optional `manager_limits`. When `system_prompt_path` is set, Helm reads that markdown file and appends it to the built-in manager tool contract.
+
+There is at most one non-archived manager session. Manager sessions have no worktree (`branch`, `worktree_path`, and `workspace_uri` are null). Children are normal sessions with `parent_session_id` set to the manager id; child sessions cannot use `manager_loop`.
+
+The manager uses a static system prompt and append-only user-role state snapshots at turn boundaries. Snapshots include live sessions, recently terminated sessions, and any wake notice. Child `turn_complete` and terminal status transitions enqueue wake notices through the daemon event bus. Wakes are serialized and coalesced; if a wake produces no assistant text and no tool calls, the visible empty turn is suppressed.
+
+Manager tools:
+
+| Tool | Purpose |
+|---|---|
+| `create_child_session` | Spawn a manager-owned child session |
+| `create_child_from_session` | Spawn a manager-owned child from another child session's current branch HEAD |
+| `create_child_from_branch` | Spawn a manager-owned child from a named local branch or ref |
+| `send_message` | Send a follow-up to a manager-owned child |
+| `stop_child` | Stop a manager-owned child |
+| `read_file` | Read a UTF-8 file from a live child worktree, capped at 256 KiB |
+| `pass_file_content` | Pass a file from one child to another without returning the bytes to the manager LLM |
+| `read_diff` | Read the same structured diff contract used by `GET /sessions/:id/diff` |
+
+File tools reject archived sessions, absolute paths, `..` traversal, and symlinks that resolve outside the child worktree. `pass_file_content` returns only metadata to the manager; the file body is sent directly to the target child as a user message. Review sessions should be created with `create_child_from_session` so reviewers see the writer branch HEAD instead of a fresh branch from `main`. Use `create_child_from_branch` to adopt work started outside Helm or to fork multiple experiments from a named branch.
+
+Manager mode defaults to `approval`. In approval mode a full batch of tool calls is emitted as pending, and the loop waits until each call is approved or denied. Denial produces a `tool_result` with `errorMessage: "denied_by_user"`. In `autopilot`, tool calls execute immediately. Mode changes affect the next loop iteration; pending calls keep their existing gate.
 
 ## 8. Git Operations
 
@@ -393,11 +429,17 @@ On success, Helm fetches origin, pushes `helm/<id>` to origin with upstream trac
 | `helm daemon status` | Report whether the daemon is reachable |
 | `helm daemon stop` | Print stop guidance (Ctrl-C the foreground daemon) |
 | `helm session create <repo> <agent> [-p <prompt>]` | Create + start a session. `-p` is an optional initial prompt. |
-| `helm session list` | List sessions with status (excludes `archived`) |
+| `helm session list [--parent <id>]` | List sessions with status (excludes `archived`) |
 | `helm session show <id>` | Print session metadata + last assistant message |
 | `helm session send <id> <text>` | Send follow-up message |
 | `helm session stop <id>` | Stop running agent (status → `stopped`); worktree preserved |
 | `helm session archive <id> [--force]` | Remove worktree + branch (status → `archived`). Requires `--force` if worktree is dirty or has unshared commits. |
+| `helm manager create <repo> <agent> [-p <prompt>] [--mode approval\|autopilot]` | Create the singleton manager |
+| `helm manager show` | Print the current manager session |
+| `helm manager send <text>` | Send a message to the manager |
+| `helm manager mode <approval\|autopilot>` | Change manager mode |
+| `helm manager approve <toolCallId>` | Approve a pending tool call |
+| `helm manager deny <toolCallId>` | Deny a pending tool call |
 
 If the daemon is reachable, every `session ...` command issues an authenticated HTTP request against it; otherwise the CLI imports `@helm/daemon` and runs the operation in-process. CLI-over-HTTP receives the browser-facing DTO; in-process callers see the full `Session` row.
 
@@ -418,13 +460,17 @@ The daemon listens on `127.0.0.1:7878` (configurable via `HELM_PORT`). All route
 | `GET` | `/health` | Liveness check. Unauthenticated. |
 | `GET` | `/auth/check` | Returns 200 iff the request's token is valid. |
 | `GET` | `/config` | Returns the public projection of `repos.json` and `agents.json` (names only; no absolute paths or commands). |
-| `GET` | `/sessions` | Lists sessions. Excludes `archived` by default; pass `?archived=1` to include them. |
-| `POST` | `/sessions` | Creates a session. Body: `{ repo, agent, prompt? }`. |
+| `GET` | `/manager` | Returns the singleton non-archived manager session or 404. |
+| `GET` | `/sessions` | Lists sessions. Excludes `archived` by default; pass `?archived=1` to include them or `?parent=<id>` to list children. |
+| `POST` | `/sessions` | Creates a session. Body: `{ repo, agent, prompt?, parent_session_id?, manager_mode?, source_session_id?, source_branch?, branch_name? }`; returns `409 manager_exists` for duplicate managers. |
 | `GET` | `/sessions/events` | SSE stream of all session/event updates (for the dashboard list). `?after=<id>` resumes after a given event id. |
 | `GET` | `/sessions/:id` | Returns `{ session, events }` for one session. |
 | `GET` | `/sessions/:id/diff?base=branch\|uncommitted` | Returns the daemon-computed structured worktree diff for a non-archived session. Defaults to `branch`; returns `400 invalid_base`, `404` for unknown sessions, or `410 archived`. |
 | `GET` | `/sessions/:id/events` | SSE stream scoped to one session. `?after=<id>` resumes. |
 | `POST` | `/sessions/:id/messages` | Sends a follow-up. Body: `{ text }`. |
+| `PATCH` | `/sessions/:id/manager-mode` | Updates a manager's mode. Body: `{ manager_mode: "approval" \| "autopilot" }`. |
+| `POST` | `/sessions/:id/tool-calls/:toolCallId/approve` | Approves a pending manager tool call. |
+| `POST` | `/sessions/:id/tool-calls/:toolCallId/deny` | Denies a pending manager tool call. |
 | `POST` | `/sessions/:id/stop` | Stops the running agent (status → `stopped`). |
 | `POST` | `/sessions/:id/archive` | Archives the session (status → `archived`). Body: `{ force? }`. Returns 409 with `code: "dirty_worktree"` or `"unshared_commits"` when preconditions fail without `force`. |
 | `POST` | `/sessions/:id/pull-request` | Pushes the session branch and creates a GitHub PR via `gh`. Body: `{ title?, body? }`. Returns the updated `PublicSession` with `pull_request_url`, `404` for unknown sessions, or `409` with `dirty_worktree`, `no_commits_ahead`, `gh_unavailable`, `non_github_remote`, `gh_failed`, or `archived`. |

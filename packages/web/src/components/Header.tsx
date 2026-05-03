@@ -15,8 +15,8 @@ export function Header({ session, onRefresh, onStop, showDiff = false, onToggleD
   return (
     <div className="header">
       <div>
-        <div className="title">{session ? `${session.repo_name} / ${session.agent_name}` : "Helm"}</div>
-        <div className="branch">{session?.branch ?? "Local coding-agent sessions"}</div>
+        <div className="title">{session ? `${session.manager_mode ? "manager" : session.repo_name} / ${session.agent_name}` : "Helm"}</div>
+        <div className="branch">{session?.manager_mode ? `mode: ${session.manager_mode}` : session?.branch ?? "Local coding-agent sessions"}</div>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         {session?.pull_request_url ? (

@@ -3,7 +3,20 @@
 import { Archive, Play } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicSession, PublicSessionEvent } from "@helm/core";
-import { ApiError, archiveSession, createSession, getConfig, getSession, listSessions, sendMessage, stopSession, type HelmConfig } from "../lib/api";
+import {
+  ApiError,
+  approveToolCall,
+  archiveSession,
+  createManagerSession,
+  createSession,
+  denyToolCall,
+  getConfig,
+  getSession,
+  listSessions,
+  sendMessage,
+  stopSession,
+  type HelmConfig
+} from "../lib/api";
 import { useAllSessionsStream, useSessionEvents } from "../lib/sse";
 import { EmptyState } from "../components/EmptyState";
 import { Header } from "../components/Header";
@@ -19,6 +32,7 @@ export default function Page() {
   const [agents, setAgents] = useState<HelmConfig["agents"]>([]);
   const [repoName, setRepoName] = useState("");
   const [agentName, setAgentName] = useState("");
+  const [managerMode, setManagerMode] = useState<"approval" | "autopilot">("approval");
   const [error, setError] = useState<string | null>(null);
   const [diffRefreshToken, setDiffRefreshToken] = useState(0);
   const [starting, setStarting] = useState(false);
@@ -95,7 +109,10 @@ export default function Page() {
     }
     setStarting(true);
     try {
-      const session = await createSession(repo, agent, prompt);
+      const agentConfig = agents.find((entry) => entry.name === agent);
+      const session = agentConfig?.headless_mode === "manager_loop"
+        ? await createManagerSession(repo, agent, prompt, managerMode)
+        : await createSession(repo, agent, prompt);
       mergeSession(session);
       setSelectedId(session.id);
       setError(null);
@@ -142,6 +159,22 @@ export default function Page() {
     }
   }
 
+  /** Approves a pending manager tool call. */
+  async function onApproveToolCall(toolCallId: string): Promise<void> {
+    if (!selectedId) {
+      return;
+    }
+    await approveToolCall(selectedId, toolCallId);
+  }
+
+  /** Denies a pending manager tool call. */
+  async function onDenyToolCall(toolCallId: string): Promise<void> {
+    if (!selectedId) {
+      return;
+    }
+    await denyToolCall(selectedId, toolCallId);
+  }
+
   return (
     <main className="app">
       <aside className="sidebar">
@@ -167,6 +200,12 @@ export default function Page() {
               <option key={agent.name} value={agent.name}>{agent.name}</option>
             ))}
           </select>
+          {agents.find((agent) => agent.name === agentName)?.headless_mode === "manager_loop" ? (
+            <select name="manager_mode" value={managerMode} onChange={(event) => setManagerMode(event.target.value as "approval" | "autopilot")}>
+              <option value="approval">Approval</option>
+              <option value="autopilot">Autopilot</option>
+            </select>
+          ) : null}
           <textarea name="prompt" placeholder="Initial prompt" />
           <button className="primary" type="submit" disabled={starting || !repoName || !agentName}>
             <Play size={15} />
@@ -186,6 +225,8 @@ export default function Page() {
             onSend={onSend}
             onStop={() => void onStop()}
             onSessionUpdate={mergeSession}
+            onApproveToolCall={(toolCallId) => void onApproveToolCall(toolCallId)}
+            onDenyToolCall={(toolCallId) => void onDenyToolCall(toolCallId)}
           />
         ) : (
           <>

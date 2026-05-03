@@ -39,15 +39,21 @@ export async function fetchOrigin(repoPath: string): Promise<void> {
   await $`git -C ${repoPath} fetch origin`.quiet();
 }
 
+/** Checks whether a git ref resolves to a commit. */
+export async function gitRefExists(repoPath: string, ref: string): Promise<boolean> {
+  const result = await $`git -C ${repoPath} rev-parse --verify --quiet ${`${ref}^{commit}`}`.quiet().nothrow();
+  return result.exitCode === 0;
+}
+
 /** Detects the default remote branch name for a repository. */
 export async function detectDefaultBranch(repoPath: string): Promise<string> {
   const result = await $`git -C ${repoPath} symbolic-ref --short refs/remotes/origin/HEAD`.quiet();
   return result.stdout.toString().trim().replace(/^origin\//, "");
 }
 
-/** Creates a named branch worktree from the remote default branch. */
-export async function createWorktree(repoPath: string, branch: string, path: string, defaultBranch: string): Promise<void> {
-  await $`git -C ${repoPath} worktree add -b ${branch} ${path} ${`origin/${defaultBranch}`}`.quiet();
+/** Creates a named branch worktree from a base ref. */
+export async function createWorktree(repoPath: string, branch: string, path: string, baseRef: string): Promise<void> {
+  await $`git -C ${repoPath} worktree add -b ${branch} ${path} ${baseRef}`.quiet();
 }
 
 /** Removes a worktree forcefully from its owning repository. */

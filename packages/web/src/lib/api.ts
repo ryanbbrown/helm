@@ -36,6 +36,11 @@ export async function createSession(repo: string, agent: string, prompt: string)
   return request("/sessions", { method: "POST", body: JSON.stringify({ repo, agent, prompt }) });
 }
 
+/** Creates the singleton manager session. */
+export async function createManagerSession(repo: string, agent: string, prompt: string, manager_mode: "approval" | "autopilot"): Promise<PublicSession> {
+  return request("/sessions", { method: "POST", body: JSON.stringify({ repo, agent, prompt, manager_mode }) });
+}
+
 /** Sends a follow-up message. */
 export async function sendMessage(id: string, text: string): Promise<PublicSession> {
   return request(`/sessions/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
@@ -44,6 +49,21 @@ export async function sendMessage(id: string, text: string): Promise<PublicSessi
 /** Stops a running session. */
 export async function stopSession(id: string): Promise<PublicSession> {
   return request(`/sessions/${id}/stop`, { method: "POST" });
+}
+
+/** Updates a manager session mode. */
+export async function setManagerMode(id: string, manager_mode: "approval" | "autopilot"): Promise<PublicSession> {
+  return request(`/sessions/${id}/manager-mode`, { method: "PATCH", body: JSON.stringify({ manager_mode }) });
+}
+
+/** Approves one pending manager tool call. */
+export async function approveToolCall(id: string, toolCallId: string): Promise<void> {
+  await request(`/sessions/${id}/tool-calls/${toolCallId}/approve`, { method: "POST" });
+}
+
+/** Denies one pending manager tool call. */
+export async function denyToolCall(id: string, toolCallId: string): Promise<void> {
+  await request(`/sessions/${id}/tool-calls/${toolCallId}/deny`, { method: "POST" });
 }
 
 /** Archives a session. */
