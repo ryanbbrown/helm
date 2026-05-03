@@ -45,16 +45,16 @@ export const managerTools: ManagerToolDefinition[] = [
     execute: createChildFromSession
   },
   {
-    schema: toolSchema("create_child_from_branch", "Create a child coding session from a named local branch or ref.", {
+    schema: toolSchema("create_child_from_branch", "Create a child coding session from an existing source branch/ref. Do not set newBranchName equal to sourceBranch; omit it to let Helm choose a safe child branch.", {
       type: "object",
       additionalProperties: false,
-      required: ["repo", "agent", "branch", "prompt"],
+      required: ["repo", "agent", "sourceBranch", "prompt"],
       properties: {
-        repo: { type: "string" },
-        agent: { type: "string" },
-        branch: { type: "string" },
-        prompt: { type: "string" },
-        branchName: { type: "string" }
+        repo: { type: "string", description: "Configured Helm repo name from the state snapshot, for example helm." },
+        agent: { type: "string", description: "Configured non-manager agent name, for example codex or claude." },
+        sourceBranch: { type: "string", description: "Existing local or remote branch/ref to branch from, for example agent/manager-review-workflow or origin/main." },
+        prompt: { type: "string", description: "Initial prompt for the new child session." },
+        newBranchName: { type: "string", description: "Optional new child branch name. Must not equal sourceBranch. Omit unless the user requested a specific child branch." }
       }
     }),
     execute: createChildFromBranch
@@ -221,9 +221,13 @@ async function createChildFromSession(args: Record<string, unknown>, ctx: Manage
 async function createChildFromBranch(args: Record<string, unknown>, ctx: ManagerToolContext): Promise<ManagerToolExecution> {
   const repo = requireString(args.repo);
   const agent = requireString(args.agent);
-  const branch = requireString(args.branch);
+  const sourceBranch = requireString(args.sourceBranch ?? args.branch);
   const prompt = requireString(args.prompt);
-  const branchName = typeof args.branchName === "string" && args.branchName.trim() ? args.branchName.trim() : undefined;
+  const newBranchNameRaw = args.newBranchName ?? args.branchName;
+  const newBranchName = typeof newBranchNameRaw === "string" && newBranchNameRaw.trim() ? newBranchNameRaw.trim() : undefined;
+  if (newBranchName === sourceBranch) {
+    return { ok: false, errorMessage: "new_branch_matches_source_branch" };
+  }
   const config = await ctx.manager.getConfig();
   const agentConfig = config.agents.find((entry) => entry.name === agent);
   if (!config.repos.some((entry) => entry.name === repo)) {
@@ -244,13 +248,13 @@ async function createChildFromBranch(args: Record<string, unknown>, ctx: Manager
     agent,
     prompt,
     parent_session_id: ctx.managerSessionId,
-    source_branch: branch,
-    branch_name: branchName
+    source_branch: sourceBranch,
+    branch_name: newBranchName
   });
   return {
     ok: true,
-    result: { sessionId: child.id, repo: child.repo_name, agent: child.agent_name, branch: child.branch, sourceBranch: branch, status: child.status },
-    childEvents: [{ kind: "child_event", childKind: "spawned", childId: child.id, detail: `from branch ${branch}` }]
+    result: { sessionId: child.id, repo: child.repo_name, agent: child.agent_name, branch: child.branch, sourceBranch, status: child.status },
+    childEvents: [{ kind: "child_event", childKind: "spawned", childId: child.id, detail: `from branch ${sourceBranch}` }]
   };
 }
 

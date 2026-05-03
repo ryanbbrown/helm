@@ -45,6 +45,16 @@ export async function gitRefExists(repoPath: string, ref: string): Promise<boole
   return result.exitCode === 0;
 }
 
+/** Lists local and origin branch refs available in a repository. */
+export async function gitBranches(repoPath: string): Promise<string[]> {
+  const result = await $`git -C ${repoPath} for-each-ref --format=${"%(refname:short)"} refs/heads refs/remotes/origin`.quiet();
+  return result.stdout
+    .toString()
+    .split("\n")
+    .map((branch) => branch.trim())
+    .filter((branch) => branch && branch !== "origin/HEAD");
+}
+
 /** Detects the default remote branch name for a repository. */
 export async function detectDefaultBranch(repoPath: string): Promise<string> {
   const result = await $`git -C ${repoPath} symbolic-ref --short refs/remotes/origin/HEAD`.quiet();
@@ -53,7 +63,10 @@ export async function detectDefaultBranch(repoPath: string): Promise<string> {
 
 /** Creates a named branch worktree from a base ref. */
 export async function createWorktree(repoPath: string, branch: string, path: string, baseRef: string): Promise<void> {
-  await $`git -C ${repoPath} worktree add -b ${branch} ${path} ${baseRef}`.quiet();
+  const result = await $`git -C ${repoPath} worktree add -b ${branch} ${path} ${baseRef}`.quiet().nothrow();
+  if (result.exitCode !== 0) {
+    throw new Error(`${result.stderr.toString().trim() || result.stdout.toString().trim() || `git worktree add failed with exit code ${result.exitCode}`}`);
+  }
 }
 
 /** Removes a worktree forcefully from its owning repository. */

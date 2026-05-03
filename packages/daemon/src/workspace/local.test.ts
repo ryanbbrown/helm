@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
 import { describe, expect, test } from "bun:test";
-import { gitRefExists } from "../git";
+import { gitBranches, gitRefExists } from "../git";
 import { isGitHubRemote, LocalWorktreeProvider } from "./local";
 
 describe("isGitHubRemote", () => {
@@ -66,5 +66,27 @@ describe("LocalWorktreeProvider", () => {
 
     expect(await gitRefExists(dir, "agent/refactor-auth")).toBe(true);
     expect(await gitRefExists(dir, "missing/ref")).toBe(false);
+  });
+
+  test("lists local and origin branch refs for manager state", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-branches-"));
+    const originPath = join(dir, "origin.git");
+    const repoPath = join(dir, "repo");
+    await $`git init --bare ${originPath}`.quiet();
+    await $`git clone ${originPath} ${repoPath}`.quiet();
+    await $`git -C ${repoPath} checkout -b main`.quiet();
+    await $`git -C ${repoPath} config user.email helm@example.com`.quiet();
+    await $`git -C ${repoPath} config user.name Helm`.quiet();
+    writeFileSync(join(repoPath, "README.md"), "main\n");
+    await $`git -C ${repoPath} add README.md`.quiet();
+    await $`git -C ${repoPath} commit -m init`.quiet();
+    await $`git -C ${repoPath} push -u origin main`.quiet();
+    await $`git -C ${repoPath} checkout -b agent/refactor-auth`.quiet();
+
+    const branches = await gitBranches(repoPath);
+
+    expect(branches).toContain("main");
+    expect(branches).toContain("agent/refactor-auth");
+    expect(branches).toContain("origin/main");
   });
 });

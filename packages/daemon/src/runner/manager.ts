@@ -146,7 +146,7 @@ export class ManagerRunnerHandle implements RunnerHandle {
       for (const userMessage of userMessages) {
         this.messages.push({ role: "user", content: userMessage });
       }
-      this.messages.push({ role: "user", content: renderStateSnapshot(this.ctx, wakeNotice ? { wakeNotice } : {}) });
+      this.messages.push({ role: "user", content: await renderStateSnapshot(this.ctx, wakeNotice ? { wakeNotice } : {}) });
       const emitted = await this.runOneTurn();
       if (!emitted && wakeNotice) {
         this.messages.push({ role: "assistant", content: "" });

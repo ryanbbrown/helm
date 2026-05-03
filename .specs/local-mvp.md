@@ -373,14 +373,14 @@ Manager tools:
 |---|---|
 | `create_child_session` | Spawn a manager-owned child session |
 | `create_child_from_session` | Spawn a manager-owned child from another child session's current branch HEAD |
-| `create_child_from_branch` | Spawn a manager-owned child from a named local branch or ref |
+| `create_child_from_branch` | Spawn a manager-owned child from a named local branch or ref using `sourceBranch`; optional `newBranchName` must be a different new branch |
 | `send_message` | Send a follow-up to a manager-owned child |
 | `stop_child` | Stop a manager-owned child |
 | `read_file` | Read a UTF-8 file from a live child worktree, capped at 256 KiB |
 | `pass_file_content` | Pass a file from one child to another without returning the bytes to the manager LLM |
 | `read_diff` | Read the same structured diff contract used by `GET /sessions/:id/diff` |
 
-File tools reject archived sessions, absolute paths, `..` traversal, and symlinks that resolve outside the child worktree. `pass_file_content` returns only metadata to the manager; the file body is sent directly to the target child as a user message. Review sessions should be created with `create_child_from_session` so reviewers see the writer branch HEAD instead of a fresh branch from `main`. Use `create_child_from_branch` to adopt work started outside Helm or to fork multiple experiments from a named branch.
+File tools reject archived sessions, absolute paths, `..` traversal, and symlinks that resolve outside the child worktree. `pass_file_content` returns only metadata to the manager; the file body is sent directly to the target child as a user message. Review sessions should be created with `create_child_from_session` so reviewers see the writer branch HEAD instead of a fresh branch from `main`. Use `create_child_from_branch` to adopt work started outside Helm or to fork multiple experiments from a named branch. Its `sourceBranch` is the existing branch/ref to copy from; `newBranchName` is optional and must not equal `sourceBranch`.
 
 Manager mode defaults to `approval`. In approval mode a full batch of tool calls is emitted as pending, and the loop waits until each call is approved or denied. Denial produces a `tool_result` with `errorMessage: "denied_by_user"`. In `autopilot`, tool calls execute immediately. Mode changes affect the next loop iteration; pending calls keep their existing gate.
 

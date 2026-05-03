@@ -10,6 +10,17 @@ import { executeManagerTool } from "./manager-tools";
 import type { HelmConfig } from "../config-loader";
 
 describe("manager tools", () => {
+  test("rejects branch children when the requested new branch matches the source branch", async () => {
+    const fixture = await createToolFixture("same-branch");
+    const result = await executeManagerTool(
+      "create_child_from_branch",
+      { repo: "fixture", agent: "codex", sourceBranch: "helm/child", newBranchName: "helm/child", prompt: "inspect only" },
+      fixture.ctx
+    );
+
+    expect(result).toMatchObject({ ok: false, errorMessage: "new_branch_matches_source_branch" });
+  });
+
   test("reads child files inside the worktree and rejects traversal", async () => {
     const fixture = await createToolFixture("read-file");
     writeFileSync(join(fixture.worktreePath, "plan.md"), "PLAN\n");

@@ -1,4 +1,5 @@
 import type { Session } from "@helm/core";
+import { gitBranches } from "../git";
 import type { ManagerToolContext } from "./manager-context";
 
 export type StateSnapshotOptions = {
@@ -6,8 +7,13 @@ export type StateSnapshotOptions = {
 };
 
 /** Renders an append-only state snapshot for a manager turn boundary. */
-export function renderStateSnapshot(ctx: ManagerToolContext, options: StateSnapshotOptions = {}): string {
+export async function renderStateSnapshot(ctx: ManagerToolContext, options: StateSnapshotOptions = {}): Promise<string> {
   const now = new Date().toISOString();
+  const config = await ctx.manager.getConfig();
+  const repoRows = await Promise.all(config.repos.map(async (repo) => {
+    const branches = await gitBranches(repo.path).catch(() => []);
+    return `- repo=${repo.name} default=${repo.default_branch} branches=${branches.join(", ") || "(none)"}`;
+  }));
   const sessions = ctx.manager.list(true).filter((session) => session.id !== ctx.managerSessionId);
   const live = sessions.filter((session) => session.status !== "archived" && !["completed", "failed", "stopped"].includes(session.status));
   const terminated = sessions
@@ -17,6 +23,8 @@ export function renderStateSnapshot(ctx: ManagerToolContext, options: StateSnaps
   return [
     `[state snapshot ${now}]`,
     options.wakeNotice ? `wake_notice: ${options.wakeNotice}` : null,
+    "available repos and branches:",
+    repoRows.join("\n"),
     "live sessions:",
     live.length ? live.map(renderSessionRow).join("\n") : "(none)",
     "recently terminated sessions:",

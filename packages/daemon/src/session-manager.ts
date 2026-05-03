@@ -107,6 +107,9 @@ export class SessionManager {
     if (input.source_branch && !(await gitRefExists(repo.path, input.source_branch))) {
       throw new Error("unknown_branch");
     }
+    if (input.source_branch && input.branch_name === input.source_branch) {
+      throw new Error("new_branch_matches_source_branch");
+    }
     const id = createId();
     const provider = agent.headless_mode === "manager_loop" ? this.nullWorkspace : this.workspace;
     const workspace = await provider.create({ repo, sessionId: id, branchName: input.branch_name, sourceRef: source?.branch ?? input.source_branch ?? undefined });
