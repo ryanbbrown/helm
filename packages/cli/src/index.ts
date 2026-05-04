@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import type { ManagerMode } from "@helm/core";
 import { validateConfig } from "./commands/config";
 import { createSession } from "./commands/session-create";
 import { listSessions } from "./commands/session-list";
@@ -45,7 +46,7 @@ manager.command("create")
   .action((repo, agent, options) => run(async () => {
     const { DaemonClient } = await import("./client");
     const { printSession } = await import("./format");
-    printSession(await new DaemonClient().create(repo, agent, options.prompt, { manager_mode: options.mode }));
+    printSession(await new DaemonClient().create(repo, agent, options.prompt, { manager_mode: parseManagerMode(options.mode) }));
   })());
 manager.command("show").description("Show the manager session").action(run(async () => {
   const { DaemonClient } = await import("./client");
@@ -63,7 +64,7 @@ manager.command("mode").argument("<mode>").description("Set manager mode").actio
   const { DaemonClient } = await import("./client");
   const client = new DaemonClient();
   const session = await client.manager();
-  await client.setManagerMode(session.id, mode);
+  await client.setManagerMode(session.id, parseManagerMode(mode));
   console.log("updated");
 })());
 manager.command("approve").argument("<toolCallId>").description("Approve a pending manager tool call").action((toolCallId) => run(async () => {
@@ -91,4 +92,12 @@ function run(fn: () => Promise<void> | void): () => void {
       process.exitCode = 1;
     });
   };
+}
+
+/** Parses a manager mode CLI argument. */
+function parseManagerMode(value: string): ManagerMode {
+  if (value === "approval" || value === "autopilot") {
+    return value;
+  }
+  throw new Error("invalid_manager_mode");
 }

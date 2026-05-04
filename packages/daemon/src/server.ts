@@ -25,8 +25,8 @@ export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), ma
         if (error instanceof PullRequestPreconditionError) {
           return json(request, { error: error.message, code: error.code, details: error.details }, 409);
         }
-        if (error instanceof Error && ["manager_exists", "nested_manager_forbidden", "parent_not_manager", "not_manager", "manager_not_running", "tool_call_not_found"].includes(error.message)) {
-          const status = error.message === "tool_call_not_found" ? 404 : 409;
+        if (error instanceof Error && ["invalid_manager_mode", "manager_exists", "nested_manager_forbidden", "parent_not_manager", "not_manager", "manager_not_running", "tool_call_not_found"].includes(error.message)) {
+          const status = error.message === "invalid_manager_mode" ? 400 : error.message === "tool_call_not_found" ? 404 : 409;
           return json(request, { error: error.message, code: error.message }, status);
         }
         return json(request, { error: error instanceof Error ? error.message : String(error) }, 500);

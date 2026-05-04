@@ -10,6 +10,24 @@ import { executeManagerTool } from "./manager-tools";
 import type { HelmConfig } from "../config-loader";
 
 describe("manager tools", () => {
+  test("does not count terminal children toward the live child limit", async () => {
+    const fixture = await createToolFixture("live-limit");
+    const atCap = await executeManagerTool(
+      "create_child_from_branch",
+      { repo: "fixture", agent: "codex", sourceBranch: "missing/ref", prompt: "inspect only" },
+      fixture.ctx
+    );
+    expect(atCap).toMatchObject({ ok: false, errorMessage: "max_live_children" });
+
+    fixture.store.updateSession(fixture.childId, { status: "completed" });
+    const terminalIgnored = await executeManagerTool(
+      "create_child_from_branch",
+      { repo: "fixture", agent: "codex", sourceBranch: "missing/ref", prompt: "inspect only" },
+      fixture.ctx
+    );
+    expect(terminalIgnored).toMatchObject({ ok: false, errorMessage: "unknown_branch" });
+  });
+
   test("rejects branch children when the requested new branch matches the source branch", async () => {
     const fixture = await createToolFixture("same-branch");
     const result = await executeManagerTool(
@@ -55,7 +73,7 @@ describe("manager tools", () => {
 
 describe("manager sessions", () => {
   test("creates manager rows with null workspaces and enforces singleton", async () => {
-    const fixture = await createToolFixture("manager-create", false);
+    const fixture = await createToolFixture("manager-create", false, false);
     const manager = await fixture.manager.create({ repo: "fixture", agent: "manager" });
 
     expect(manager.worktree_path).toBeNull();
@@ -64,6 +82,12 @@ describe("manager sessions", () => {
     expect(manager.manager_mode).toBe("approval");
     await expect(fixture.manager.create({ repo: "fixture", agent: "manager" })).rejects.toThrow("manager_exists");
   });
+
+  test("rejects invalid manager mode on creation", async () => {
+    const fixture = await createToolFixture("manager-invalid-mode", false, false);
+
+    await expect(fixture.manager.create({ repo: "fixture", agent: "manager", manager_mode: "bogus" as never })).rejects.toThrow("invalid_manager_mode");
+  });
 });
 
 type ToolFixture = {
@@ -71,11 +95,12 @@ type ToolFixture = {
   ctx: { manager: SessionManager; managerSessionId: string };
   manager: SessionManager;
   outsidePath: string;
+  store: Store;
   worktreePath: string;
 };
 
 /** Creates a temp repo and store with a manager-owned child row. */
-async function createToolFixture(name: string, insertChild = true): Promise<ToolFixture> {
+async function createToolFixture(name: string, insertChild = true, insertManager = true): Promise<ToolFixture> {
   const dir = await mkdtemp(join(tmpdir(), `helm-manager-tools-${name}-`));
   const repoPath = join(dir, "repo");
   const worktreePath = join(dir, "worktree");
@@ -91,6 +116,20 @@ async function createToolFixture(name: string, insertChild = true): Promise<Tool
 
   const store = new Store(join(dir, "helm.db"));
   const now = new Date().toISOString();
+  if (insertManager) {
+    store.insertSession({
+      id: "manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "running",
+      created_at: now,
+      updated_at: now
+    });
+  }
   if (insertChild) {
     store.insertSession({
       id: "child",
@@ -108,9 +147,17 @@ async function createToolFixture(name: string, insertChild = true): Promise<Tool
     repos: [{ name: "fixture", path: repoPath, default_branch: "main" }],
     agents: [
       { name: "codex", command: "codex", args: [], headless_mode: "codex_exec" },
-      { name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key_env: "OPENROUTER_API_KEY" }
+      {
+        name: "manager",
+        command: "manager",
+        args: [],
+        headless_mode: "manager_loop",
+        model: "test-model",
+        api_key_env: "OPENROUTER_API_KEY",
+        manager_limits: { max_live_children: 1 }
+      }
     ]
   };
   const manager = new SessionManager({ config, store });
-  return { childId: "child", ctx: { manager, managerSessionId: "manager" }, manager, outsidePath, worktreePath };
+  return { childId: "child", ctx: { manager, managerSessionId: "manager" }, manager, outsidePath, store, worktreePath };
 }

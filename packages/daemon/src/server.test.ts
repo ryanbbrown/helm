@@ -87,6 +87,28 @@ describe("daemon diff route", () => {
   });
 });
 
+describe("daemon manager route", () => {
+  test("rejects invalid manager mode on creation", async () => {
+    const fixture = createManagerFixture("invalid-mode");
+    const server = startServer(0, token, fixture.manager);
+    try {
+      const response = await fetch(`http://${server.hostname}:${server.port}/sessions`, {
+        body: JSON.stringify({ repo: "fixture", agent: "manager", manager_mode: "bogus" }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_manager_mode" });
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
 describe("daemon pull request route", () => {
   test("creates a pull request, persists the URL, and is idempotent", async () => {
     const fixture = createPullRequestFixture("pr-create");
@@ -138,6 +160,10 @@ type PullRequestFixture = {
   workspace: FakeWorkspaceProvider;
 };
 
+type ManagerFixture = {
+  manager: SessionManager;
+};
+
 type ArchiveRequestOptions = {
   body?: BodyInit;
   headers?: HeadersInit;
@@ -166,6 +192,17 @@ function createPullRequest(server: Bun.Server<unknown>, sessionId: string, body:
     },
     method: "POST"
   });
+}
+
+/** Creates a session manager configured with a manager agent. */
+function createManagerFixture(name: string): ManagerFixture {
+  const dir = mkdtempSync(join(tmpdir(), `helm-server-manager-${name}-`));
+  const store = new Store(join(dir, "helm.db"));
+  const config: HelmConfig = {
+    repos: [{ name: "fixture", path: join(dir, "repo"), default_branch: "main" }],
+    agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key_env: "OPENROUTER_API_KEY" }]
+  };
+  return { manager: new SessionManager({ config, store }) };
 }
 
 /** Creates a repo, dirty-able worktree, and session row for server archive tests. */

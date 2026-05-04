@@ -169,7 +169,7 @@ async function createChildSession(args: Record<string, unknown>, ctx: ManagerToo
     return { ok: false, errorMessage: "nested_manager_forbidden" };
   }
   const limits = { ...DEFAULT_MANAGER_LIMITS, ...config.agents.find((entry) => entry.name === ctx.manager.getRequired(ctx.managerSessionId).agent_name)?.manager_limits };
-  if (ctx.manager.listChildren(ctx.managerSessionId).length >= limits.max_live_children) {
+  if (liveChildCount(ctx) >= limits.max_live_children) {
     return { ok: false, errorMessage: "max_live_children" };
   }
   const child = await ctx.manager.create({ repo, agent, prompt, parent_session_id: ctx.managerSessionId });
@@ -199,7 +199,7 @@ async function createChildFromSession(args: Record<string, unknown>, ctx: Manage
     return { ok: false, errorMessage: "invalid_source_session" };
   }
   const limits = { ...DEFAULT_MANAGER_LIMITS, ...config.agents.find((entry) => entry.name === ctx.manager.getRequired(ctx.managerSessionId).agent_name)?.manager_limits };
-  if (ctx.manager.listChildren(ctx.managerSessionId).length >= limits.max_live_children) {
+  if (liveChildCount(ctx) >= limits.max_live_children) {
     return { ok: false, errorMessage: "max_live_children" };
   }
   const child = await ctx.manager.create({
@@ -240,7 +240,7 @@ async function createChildFromBranch(args: Record<string, unknown>, ctx: Manager
     return { ok: false, errorMessage: "nested_manager_forbidden" };
   }
   const limits = { ...DEFAULT_MANAGER_LIMITS, ...config.agents.find((entry) => entry.name === ctx.manager.getRequired(ctx.managerSessionId).agent_name)?.manager_limits };
-  if (ctx.manager.listChildren(ctx.managerSessionId).length >= limits.max_live_children) {
+  if (liveChildCount(ctx) >= limits.max_live_children) {
     return { ok: false, errorMessage: "max_live_children" };
   }
   const child = await ctx.manager.create({
@@ -435,4 +435,9 @@ function requireChild(ctx: ManagerToolContext, sessionId: string) {
     throw new Error("not_a_child");
   }
   return child;
+}
+
+/** Counts only children that can still consume live manager capacity. */
+function liveChildCount(ctx: ManagerToolContext): number {
+  return ctx.manager.listChildren(ctx.managerSessionId).filter((session) => !["completed", "failed", "stopped"].includes(session.status)).length;
 }

@@ -80,6 +80,10 @@ export class SessionManager {
     const config = await this.loadHelmConfig();
     const repo = findRepo(config, input.repo);
     const agent = findAgent(config, input.agent);
+    const managerMode = input.manager_mode ?? "approval";
+    if (agent.headless_mode === "manager_loop" && !isManagerMode(managerMode)) {
+      throw new Error("invalid_manager_mode");
+    }
     if (agent.headless_mode === "manager_loop" && this.store.getActiveManagerSession()) {
       throw new Error("manager_exists");
     }
@@ -123,7 +127,7 @@ export class SessionManager {
       worktree_path: workspace.cwd,
       workspace_uri: workspace.uri,
       parent_session_id: input.parent_session_id ?? null,
-      manager_mode: agent.headless_mode === "manager_loop" ? input.manager_mode ?? "approval" : null,
+      manager_mode: agent.headless_mode === "manager_loop" ? managerMode : null,
       status: "created",
       created_at: now,
       updated_at: now
@@ -287,6 +291,9 @@ export class SessionManager {
 
   /** Updates a manager session mode. */
   setManagerMode(id: string, mode: ManagerMode): Session {
+    if (!isManagerMode(mode)) {
+      throw new Error("invalid_manager_mode");
+    }
     const session = this.getRequired(id);
     if (!session.manager_mode) {
       throw new Error("not_manager");
@@ -413,4 +420,9 @@ export class SessionManager {
 /** Truncates pull request titles to a concise length. */
 function truncateTitle(value: string): string {
   return value.length > 72 ? `${value.slice(0, 69)}...` : value;
+}
+
+/** Checks whether a value is a valid manager mode. */
+function isManagerMode(value: unknown): value is ManagerMode {
+  return value === "approval" || value === "autopilot";
 }
