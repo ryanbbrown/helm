@@ -7,3 +7,15 @@
 [submodule "references/symphony"]
 	path = references/symphony
 	url = https://github.com/openai/symphony.git
+[submodule "references/1code"]
+	path = references/1code
+	url = https://github.com/21st-dev/1code.git
+[submodule "references/maestro"]
+	path = references/maestro
+	url = https://github.com/RunMaestro/Maestro.git
+[submodule "references/nimbalyst"]
+	path = references/nimbalyst
+	url = https://github.com/Nimbalyst/nimbalyst.git
+[submodule "references/agent-orchestrator"]
+	path = references/agent-orchestrator
+	url = https://github.com/ComposioHQ/agent-orchestrator.git

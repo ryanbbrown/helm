@@ -36,7 +36,7 @@ Decision table. If you can't find a row that matches your change, add one to thi
 | Change to auth (token, origin allowlist) | Unit test for accepted vs rejected requests. Cover: missing token, wrong token, disallowed origin, valid token + allowed origin. |
 | Workspace provider implementation | Integration test against a real worktree (for local) or a faked backend (for cloud). The provider's `assertRemoveSafe` is its own sub-test (dirty tree, unshared commits, both, neither). |
 | Spec change (`.specs/local-mvp.md`) | Spec change must land in the same commit as the code that implements (or removes) the behavior. No drift commits. |
-| Forward-compat doc change (`.context/forward-compat.md`) | No test required, but the doc must be updated when its referenced files or line numbers move. |
+| Forward-compat doc change (`.plans/forward-compat.md`) | No test required, but the doc must be updated when its referenced files or line numbers move. |
 
 ## 3. Forbidden test shortcuts
 
@@ -102,10 +102,15 @@ If a change implies a spec update, do not land the code change without updating 
 ## 10. Reference materials
 
 - Spec: `.specs/local-mvp.md` — the authoritative contract.
-- Forward-compat plans: `.context/forward-compat.md` — what's planned next; obey priority order.
+- `.specs/` is normative; keep only the active contract there, currently `.specs/local-mvp.md`.
+- `.plans/` is execution strategy and roadmap material; useful context, but allowed to become stale after implementation.
+- `.comms/` is communication artifacts such as reviews, handoffs, and agent-to-agent notes.
+- `.context/` is non-normative background such as product briefs, research, comparisons, and evaluations.
+- Forward-compat plans: `.plans/forward-compat.md` — what's planned next; obey priority order.
 - Reference implementations (read-only):
   - `references/conductor-oss/` — bridge/relay patterns, agent adapters, dashboard idioms.
   - `references/symphony/` — orchestrator daemon, task-board model.
   - `references/code-conductor/` — bash worktree management.
+  - `references/1code/`, `references/agent-orchestrator/`, `references/maestro/`, `references/nimbalyst/` — comparable agent orchestration products.
 
 These are submodules. Do not edit them; they are external reference only.

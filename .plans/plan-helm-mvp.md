@@ -1,7 +1,7 @@
 # Plan: Helm Local MVP
 
 Spec: `.specs/local-mvp.md`
-Brief: `.specs/gpt-prod-brief.md`
+Brief: `.context/product/gpt-prod-brief.md`
 
 ## Overview
 

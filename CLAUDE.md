@@ -22,14 +22,17 @@ HELM_REAL_AGENT_E2E=1 bun run test:agents
 
 ## Where things live
 
-- `.specs/local-mvp.md` — authoritative system spec. If you change behavior, update the spec in the same commit.
-- `.context/forward-compat.md` — planned upcoming work; obey the priority order.
+- `.specs/` is normative; keep only the active contract there, currently `.specs/local-mvp.md`.
+- `.plans/` is execution strategy and roadmap material; useful context, but allowed to become stale after implementation.
+- `.comms/` is communication artifacts such as reviews, handoffs, and agent-to-agent notes.
+- `.context/` is non-normative background such as product briefs, research, comparisons, and evaluations.
+- `.plans/forward-compat.md` — planned upcoming work; obey the priority order.
 - `packages/core/` — types and schemas shared by daemon, CLI, and web.
 - `packages/daemon/` — session manager, runner adapters, store, HTTP/SSE server.
 - `packages/cli/` — `helm` CLI; talks to the daemon over HTTP when one is running, otherwise imports `@helm/daemon` in-process.
 - `packages/web/` — Next.js dashboard.
 - `tests/e2e/` — Playwright e2e suite, including the opt-in real-agent regression tests.
-- `references/` — read-only submodules of Conductor OSS, Symphony, Code Conductor.
+- `references/` — read-only submodules of comparable agent orchestration projects.
 
 ## Repo conventions
 

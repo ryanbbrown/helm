@@ -1,7 +1,7 @@
 # Helm — Local MVP System Specification
 
 Status: Draft v1
-Scope: Local-only execution. No cloud/remote runtimes. No direct GitHub API integration; PR creation uses the local `gh` CLI. No manager-level chat.
+Scope: Local-only execution. No cloud/remote runtimes. No direct GitHub API integration; PR creation uses the local `gh` CLI. Includes a singleton manager session for local orchestration.
 
 ## Normative Language
 
@@ -518,7 +518,6 @@ The allowlist is defense-in-depth; the token is the actual auth boundary.
 - Remote / cloud execution targets.
 - Direct GitHub API automation, including issue linking. PR creation is supported only through the local `gh` CLI.
 - Native desktop shell packaging. The browser dashboard is in scope for the MVP.
-- A manager-level chat across sessions.
 - Multi-user / multi-tenant.
 - Approval gates / pause-resume.
 - Adapters beyond `claude` and `codex`.

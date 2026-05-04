@@ -1,8 +1,8 @@
 # Helm — fixes to land before phase 5
 
-Context: phases 0-4 of `.context/plan-helm-mvp.md` are implemented. This file lists issues identified during a review of that implementation that should be fixed **before** building further on top, either because they are hard to reverse later or because they will produce confusing bugs during real-world testing.
+Context: phases 0-4 of `.plans/plan-helm-mvp.md` are implemented. This file lists issues identified during a review of that implementation that should be fixed **before** building further on top, either because they are hard to reverse later or because they will produce confusing bugs during real-world testing.
 
-Spec: `.specs/local-mvp.md`. Plan: `.context/plan-helm-mvp.md`.
+Spec: `.specs/local-mvp.md`. Plan: `.plans/plan-helm-mvp.md`.
 
 ## Priority 1 — hard-to-reverse design issues
 
