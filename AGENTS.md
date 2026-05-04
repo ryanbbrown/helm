@@ -115,10 +115,10 @@ If a change implies a spec update, do not land the code change without updating 
 
 These are submodules. Do not edit them; they are external reference only.
 
-## 11. Running Helm locally
+## 11. Manager API key
 
-When starting the daemon from this repo for interactive use, load the repo `.env` so manager sessions inherit `OPENROUTER_API_KEY`:
+Manager sessions read the OpenRouter API key from the manager agent entry in `~/.helm/config/agents.json`.
 
-`bun --env-file=.env run --cwd packages/cli start daemon start`
+Do not rely on `.env` or shell environment variables for the manager key. A manager agent must include `model` and `api_key`; the daemon intentionally has a single config path for this secret.
 
-Starting the daemon without `.env` will let normal sessions work, but manager sessions fail when they first call OpenRouter.
+The dashboard-safe `/config` response exposes only agent names and headless modes, not `api_key`.

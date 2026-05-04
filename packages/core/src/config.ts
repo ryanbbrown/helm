@@ -17,7 +17,7 @@ export const agentConfigSchema = z.object({
   args: z.array(z.string()).default([]),
   headless_mode: z.enum(["claude_stream_json", "codex_exec", "manager_loop"]),
   model: z.string().min(1).optional(),
-  api_key_env: z.string().min(1).optional(),
+  api_key: z.string().min(1).optional(),
   system_prompt_path: z.string().min(1).optional(),
   manager_limits: z.object({
     max_tool_iterations_per_turn: z.number().int().positive().default(DEFAULT_MANAGER_LIMITS.max_tool_iterations_per_turn),

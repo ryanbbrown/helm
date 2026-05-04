@@ -118,7 +118,7 @@ function createLoopFixture(): LoopFixture {
     created_at: now,
     updated_at: now
   });
-  const agent: AgentConfig = { name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key_env: "OPENROUTER_API_KEY" };
+  const agent: AgentConfig = { name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" };
   const config: HelmConfig = {
     repos: [{ name: "fixture", path: dir, default_branch: "main" }],
     agents: [agent]

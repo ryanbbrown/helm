@@ -153,7 +153,7 @@ async function createToolFixture(name: string, insertChild = true, insertManager
         args: [],
         headless_mode: "manager_loop",
         model: "test-model",
-        api_key_env: "OPENROUTER_API_KEY",
+        api_key: "test-key",
         manager_limits: { max_live_children: 1 }
       }
     ]

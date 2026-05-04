@@ -40,8 +40,8 @@ export async function loadConfig(baseDir?: string): Promise<HelmConfig> {
       throw new Error(`Duplicate agent name: ${agent.name}`);
     }
     agentNames.add(agent.name);
-    if (agent.headless_mode === "manager_loop" && (!agent.model || !agent.api_key_env)) {
-      throw new Error(`Manager agent ${agent.name} requires model and api_key_env`);
+    if (agent.headless_mode === "manager_loop" && (!agent.model || !agent.api_key)) {
+      throw new Error(`Manager agent ${agent.name} requires model and api_key`);
     }
   }
 

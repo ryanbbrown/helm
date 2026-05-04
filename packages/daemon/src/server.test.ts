@@ -200,7 +200,7 @@ function createManagerFixture(name: string): ManagerFixture {
   const store = new Store(join(dir, "helm.db"));
   const config: HelmConfig = {
     repos: [{ name: "fixture", path: join(dir, "repo"), default_branch: "main" }],
-    agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key_env: "OPENROUTER_API_KEY" }]
+    agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" }]
   };
   return { manager: new SessionManager({ config, store }) };
 }

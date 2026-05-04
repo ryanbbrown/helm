@@ -50,10 +50,9 @@ export class OpenRouterClient implements ManagerChatClient {
   private client: OpenAI;
 
   /** Creates an OpenRouter client using an OpenAI-compatible endpoint. */
-  constructor(apiKeyEnv: string) {
-    const apiKey = process.env[apiKeyEnv];
+  constructor(apiKey: string) {
     if (!apiKey) {
-      throw new Error(`Missing ${apiKeyEnv}`);
+      throw new Error("Missing OpenRouter API key");
     }
     this.client = new OpenAI({
       apiKey,

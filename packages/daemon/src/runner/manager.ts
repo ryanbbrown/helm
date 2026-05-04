@@ -176,7 +176,7 @@ export class ManagerRunnerHandle implements RunnerHandle {
     const limits = this.limits();
     for (let iteration = 0; iteration < limits.max_tool_iterations_per_turn; iteration += 1) {
       this.abortController = new AbortController();
-      this.client ??= new OpenRouterClient(this.agent.api_key_env ?? "OPENROUTER_API_KEY");
+      this.client ??= new OpenRouterClient(this.agent.api_key ?? "");
       const response = await this.client.chatCompletion({
         model: this.agent.model ?? "",
         messages: this.messages,

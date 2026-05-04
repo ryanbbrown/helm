@@ -152,7 +152,7 @@ The runner adapter owns the headless flags (see §7.2).
 | `args` | string[] | Extra flags passed after headless flags |
 | `headless_mode` | enum | `claude_stream_json` \| `codex_exec` \| `manager_loop` |
 | `model` | string? | Required for `manager_loop`; OpenRouter model id |
-| `api_key_env` | string? | Required for `manager_loop`; environment variable containing the OpenRouter key |
+| `api_key` | string? | Required for `manager_loop`; OpenRouter API key stored in private local config |
 | `system_prompt_path` | string? | Optional markdown file appended to the built-in manager system prompt |
 | `manager_limits` | object? | Optional caps for manager loop iterations, tool calls, queued wakes, and live children |
 
@@ -361,7 +361,7 @@ The session manager consumes `events`, persists them, and never branches on whic
 
 ### 7.5 `manager_loop` Adapter
 
-`manager_loop` is an in-process `RunnerAdapter` backed by the OpenAI SDK pointed at OpenRouter (`https://openrouter.ai/api/v1`). It is configured by an agent entry with `model`, `api_key_env`, optional `system_prompt_path`, and optional `manager_limits`. When `system_prompt_path` is set, Helm reads that markdown file and appends it to the built-in manager tool contract.
+`manager_loop` is an in-process `RunnerAdapter` backed by the OpenAI SDK pointed at OpenRouter (`https://openrouter.ai/api/v1`). It is configured by an agent entry with `model`, `api_key`, optional `system_prompt_path`, and optional `manager_limits`. The `api_key` stays in private local config and is never returned by the dashboard-safe config endpoint. When `system_prompt_path` is set, Helm reads that markdown file and appends it to the built-in manager tool contract.
 
 There is at most one non-archived manager session. Manager sessions have no worktree (`branch`, `worktree_path`, and `workspace_uri` are null). Children are normal sessions with `parent_session_id` set to the manager id; child sessions cannot use `manager_loop`.
 

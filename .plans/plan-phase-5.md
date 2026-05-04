@@ -17,7 +17,7 @@ The manager is **proactive**: it subscribes to its children's `turn_complete` an
 ## Decisions (confirmed; do not relitigate)
 
 1. **Manager is a custom agent loop, not a framework.** ~50-150 lines. We own the loop, tool dispatch, and event mapping. No Pydantic AI, LangGraph, Mastra, or Claude Agent SDK.
-2. **OpenRouter via the OpenAI SDK is the default LLM gateway.** Model is configured per-manager in `agents.json` (`"anthropic/claude-opus-4.7"`, `"openai/gpt-5"`, etc.). API key from `OPENROUTER_API_KEY`. Adding a non-OpenAI-compatible provider later is a new `headless_mode`, not a rewrite.
+2. **OpenRouter via the OpenAI SDK is the default LLM gateway.** Model is configured per-manager in `agents.json` (`"anthropic/claude-opus-4.7"`, `"openai/gpt-5"`, etc.). API key from the manager `api_key` config field. Adding a non-OpenAI-compatible provider later is a new `headless_mode`, not a rewrite.
 3. **Worktrees stay strictly isolated.** No `workspace_from`, no shared trees, no `git worktree --force`. Each session — manager or child — has its own (or none, in the manager's case).
 4. **Manager has no worktree.** `WorkspaceProvider` gains a no-op `null` provider used for managers; `worktree_path` / `workspace_uri` is null for manager sessions.
 5. **Inter-session communication is file-based.** Manager reads child files via `read_file`; passes file content directly via `pass_file_content` without LLM round-tripping. Bucket-3 artifact-passing pattern, not IPC.
@@ -127,7 +127,7 @@ The bulk of the work. Implement the agent loop, tool dispatch, append-only state
 
 | File | Purpose |
 |---|---|
-| `packages/daemon/src/runner/openrouter.ts` | Thin wrapper around `openai` SDK. Constructs client with `baseURL: "https://openrouter.ai/api/v1"` and `apiKey: process.env[apiKeyEnv]`. Exposes `chatCompletion({ model, messages, tools, signal })` — non-streaming; returns the full assistant message including any tool calls. Supports passing through Anthropic-style `cache_control` markers in `messages[].content[].cache_control` when present (transparent for OpenAI / OpenRouter handles it for Anthropic models). |
+| `packages/daemon/src/runner/openrouter.ts` | Thin wrapper around `openai` SDK. Constructs client with `baseURL: "https://openrouter.ai/api/v1"` and `apiKey: the configured manager api_key`. Exposes `chatCompletion({ model, messages, tools, signal })` — non-streaming; returns the full assistant message including any tool calls. Supports passing through Anthropic-style `cache_control` markers in `messages[].content[].cache_control` when present (transparent for OpenAI / OpenRouter handles it for Anthropic models). |
 
 #### 5.2.2 Manager runner
 
@@ -164,8 +164,8 @@ Each tool returns `{ ok: boolean, result?: unknown, errorMessage?: string }`. Er
 |---|---|
 | `packages/daemon/src/runner/index.ts` | `createRunnerAdapter` dispatches `manager_loop → ManagerRunnerAdapter` in addition to existing `claude_stream_json` / `codex_exec`. |
 | `packages/daemon/src/session-manager.ts` | Pass `parent_session_id` from `CreateSessionInput` through to `Store.insertSession`. Honor null workspace for manager sessions. Inject `ManagerToolContext` into the manager adapter. Enforce singleton: reject `create` for `manager_loop` agents if a non-archived manager session already exists. |
-| `packages/core/src/config.ts` | Extend `AgentConfig` zod schema with optional `model`, `api_key_env`, and `manager_limits` fields. Allowed `headless_mode`: add `"manager_loop"`. `manager_limits` supports high defaults such as `{ max_tool_iterations_per_turn: 20, max_tool_calls_per_batch: 20, max_queued_wakes_per_turn: 50, max_live_children: 25 }`. |
-| `packages/daemon/src/config-loader.ts` | Validate that manager agents have `model` and `api_key_env`. |
+| `packages/core/src/config.ts` | Extend `AgentConfig` zod schema with optional `model`, `api_key`, and `manager_limits` fields. Allowed `headless_mode`: add `"manager_loop"`. `manager_limits` supports high defaults such as `{ max_tool_iterations_per_turn: 20, max_tool_calls_per_batch: 20, max_queued_wakes_per_turn: 50, max_live_children: 25 }`. |
+| `packages/daemon/src/config-loader.ts` | Validate that manager agents have `model` and `api_key`. |
 
 #### 5.2.5 Tests
 
@@ -336,10 +336,10 @@ Add a Playwright case to `tests/e2e/real-agents.spec.ts` so the slow tier catche
 | `tests/e2e/real-agents.spec.ts` | New test: spawn a manager in `autopilot` mode with `model: "anthropic/claude-haiku-4-5-20251001"` (cheap), prompt it to spawn a child Claude session in a temp repo with the prompt "create plan.md containing the word PLAN", wait for the child to reach `awaiting_input` (which will wake the manager), then assert the manager autonomously calls `read_file` (or `pass_file_content`) on `plan.md` and produces an assistant message that mentions "PLAN". Stops the manager and the child cleanly. |
 | `tests/e2e/real-agents.spec.ts` | Second new test: planner/critic flow. Spawn the manager in `autopilot` mode. Manager spawns Claude with "write plan.md (one sentence)", waits, then is prompted by the user "now have codex critique the plan." Manager spawns Codex, calls `pass_file_content` with the plan, waits for Codex's response, calls `pass_file_content` back to Claude with Codex's `feedback.md`. Assert both children received the expected file contents (inspect the children's `user_message` events). |
 
-These tests only run under `HELM_REAL_AGENT_E2E=1` and additionally require `OPENROUTER_API_KEY`. CI instructions are updated.
+These tests only run under `HELM_REAL_AGENT_E2E=1`. CI instructions are updated.
 
 **Verify (Phase 5.6):**
-- `HELM_REAL_AGENT_E2E=1 OPENROUTER_API_KEY=... bun run test:agents` passes both new tests.
+- `HELM_REAL_AGENT_E2E=1 bun run test:agents` passes both new tests.
 - Without the env vars, the tests are skipped, not failed.
 
 ---
@@ -352,7 +352,7 @@ Drift is the most expensive bug class in this repo. Spec is updated *in the same
 |---|---|---|
 | `.specs/local-mvp.md` | §5.1.3 Session | Note that `parent_session_id` is set when a manager spawns a child; null otherwise. Note `worktree_path` is null for manager sessions. Add `manager_mode` field; null for non-manager sessions, `"autopilot"` or `"approval"` for managers (default `"approval"`). |
 | §5.1.4 SessionEvent | Add `tool_invocation`, `tool_call_resolved`, `tool_result`, `child_event` to the `kind` enum. |
-| §7.2 Headless Mode Adapters | Add `manager_loop` subsection: OpenRouter via `openai` SDK; configured `model`, `api_key_env`, and optional `manager_limits`; static system prompt plus append-only state snapshots; tool schema (5 tools, two of which are file-passing); singleton constraint; EventBus wakeup model with quiescence rule; serialized + coalesced wakes; abort semantics; **operating modes** (`approval` vs `autopilot`) with the gating semantics, denial → synthesized tool_result behavior, and live-toggle rules. |
+| §7.2 Headless Mode Adapters | Add `manager_loop` subsection: OpenRouter via `openai` SDK; configured `model`, `api_key`, and optional `manager_limits`; static system prompt plus append-only state snapshots; tool schema (5 tools, two of which are file-passing); singleton constraint; EventBus wakeup model with quiescence rule; serialized + coalesced wakes; abort semantics; **operating modes** (`approval` vs `autopilot`) with the gating semantics, denial → synthesized tool_result behavior, and live-toggle rules. |
 | §7.3 Normalized Event Stream | Add the four new kinds to the table. UI contract: surfaced for manager sessions only; suppressed in others (children never emit them). |
 | §9 CLI Surface | Add `helm manager create [--mode]`, `helm manager show`, `helm manager send`, `helm manager mode`, `helm manager approve`, `helm manager deny`. Add `--parent` to `session list`. |
 | §11 HTTP API | Update `POST /sessions` body schema (accepts `manager_mode`); document `409 manager_exists`. Add `?parent=<id>` to `GET /sessions`. Add `GET /manager`, `PATCH /sessions/:id/manager-mode`, `POST /sessions/:id/tool-calls/:toolCallId/approve`, `POST /sessions/:id/tool-calls/:toolCallId/deny`. |
