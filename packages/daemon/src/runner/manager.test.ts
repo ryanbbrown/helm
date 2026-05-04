@@ -42,6 +42,34 @@ describe("ManagerRunnerAdapter", () => {
     expect(client.calls).toHaveLength(2);
     expect(client.calls[1]?.messages.at(-1)).toMatchObject({ role: "tool" });
   });
+
+  test("emits a visible lifecycle notice when a child turn completes", async () => {
+    const fixture = createLoopFixture();
+    insertChildSession(fixture, "child-1", "working on tests");
+    const client = new FakeManagerChatClient([
+      { message: { role: "assistant", content: "checking child output" }, finishReason: "stop" }
+    ]);
+    const handle = new ManagerRunnerAdapter(fixture.agent, { manager: fixture.manager, managerSessionId: "manager" }, client).spawn({
+      command: "manager",
+      cwd: "",
+      extraArgs: [],
+      logPath: join(fixture.dir, "manager.jsonl")
+    }) as ManagerRunnerHandle;
+
+    consumePrivateEvents(fixture.manager, "manager", handle);
+    emitPrivateEvent(fixture.manager, "child-1", { kind: "turn_complete" });
+
+    await waitForPersistedEvent(fixture.manager, "manager", "turn_complete");
+    expect(fixture.manager.listEvents("manager")).toContainEqual(expect.objectContaining({
+      kind: "child_event",
+      payload: { kind: "child_event", childKind: "awaiting_input", childId: "child-1" }
+    }));
+    expect(fixture.manager.listEvents("manager")).toContainEqual(expect.objectContaining({
+      kind: "assistant_message",
+      payload: { kind: "assistant_message", text: "checking child output" }
+    }));
+    await handle.stop();
+  });
 });
 
 /** Reads the next runner event. */
@@ -70,6 +98,7 @@ type LoopFixture = {
   agent: AgentConfig;
   dir: string;
   manager: SessionManager;
+  store: Store;
 };
 
 /** Creates a manager session row and fake manager config. */
@@ -94,7 +123,46 @@ function createLoopFixture(): LoopFixture {
     repos: [{ name: "fixture", path: dir, default_branch: "main" }],
     agents: [agent]
   };
-  return { agent, dir, manager: new SessionManager({ config, store }) };
+  return { agent, dir, manager: new SessionManager({ config, store }), store };
+}
+
+/** Inserts a manager-owned child session row for manager loop tests. */
+function insertChildSession(fixture: LoopFixture, id: string, lastAssistantMessage: string): void {
+  const now = new Date().toISOString();
+  fixture.store.insertSession({
+    id,
+    repo_name: "fixture",
+    agent_name: "codex",
+    branch: `helm/${id}`,
+    worktree_path: join(fixture.dir, id),
+    workspace_uri: `file://${join(fixture.dir, id)}`,
+    parent_session_id: "manager",
+    status: "running",
+    created_at: now,
+    updated_at: now
+  });
+  fixture.store.updateSession(id, { last_assistant_message: lastAssistantMessage });
+}
+
+/** Emits an event through the manager's private persistence path for subscription tests. */
+function emitPrivateEvent(manager: SessionManager, sessionId: string, event: NormalizedEvent): void {
+  (manager as unknown as { persistEvent(id: string, event: NormalizedEvent): void }).persistEvent(sessionId, event);
+}
+
+/** Starts the manager's private event consumer for a test handle. */
+function consumePrivateEvents(manager: SessionManager, sessionId: string, handle: ManagerRunnerHandle): void {
+  void (manager as unknown as { consumeEvents(id: string, handle: ManagerRunnerHandle): Promise<void> }).consumeEvents(sessionId, handle);
+}
+
+/** Waits until a persisted event kind appears on a session. */
+async function waitForPersistedEvent(manager: SessionManager, sessionId: string, kind: NormalizedEvent["kind"]): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (manager.listEvents(sessionId).some((event) => event.kind === kind)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${kind}`);
 }
 
 class FakeManagerChatClient implements ManagerChatClient {

@@ -309,6 +309,37 @@ textarea {
   font-size: 13px;
 }
 
+.event-line.tool-call {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+}
+
+.tool-call-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.tool-call-raw summary {
+  cursor: pointer;
+}
+
+.tool-call-raw pre {
+  background: #f3f5f1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  margin: 6px 0 0;
+  max-width: min(720px, 100%);
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.child-lifecycle {
+  color: #6d746b;
+}
+
 .error-line {
   color: var(--danger);
   font-size: 13px;

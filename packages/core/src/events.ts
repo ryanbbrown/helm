@@ -58,7 +58,7 @@ export type ToolResultEvent = {
   errorMessage?: string;
 };
 
-export type ChildEventKind = "spawned" | "message_sent" | "stopped" | "error" | "notice";
+export type ChildEventKind = "spawned" | "message_sent" | "awaiting_input" | "completed" | "failed" | "stopped" | "error" | "notice";
 
 export type ChildEvent = {
   kind: "child_event";

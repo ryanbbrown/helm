@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { DEFAULT_MANAGER_LIMITS, type AgentConfig, type ManagerMode, type NormalizedEvent } from "@helm/core";
+import { DEFAULT_MANAGER_LIMITS, type AgentConfig, type ChildEvent, type ManagerMode, type NormalizedEvent, type SessionStatus } from "@helm/core";
 import { AsyncQueue } from "./queue";
 import { renderSystemPrompt } from "./manager-prompt";
 import { renderStateSnapshot } from "./manager-state";
@@ -47,6 +47,7 @@ export class ManagerRunnerHandle implements RunnerHandle {
   private pending = new Map<string, PendingToolCall>();
   private wakeQueue: string[] = [];
   private userQueue: string[] = [];
+  private lifecycleEvents = new Set<string>();
   private unsubscribe: () => void;
 
   /** Creates a running manager handle. */
@@ -62,10 +63,12 @@ export class ManagerRunnerHandle implements RunnerHandle {
       if (event.type === "event") {
         const session = ctx.manager.get(event.event.session_id);
         if (session?.parent_session_id === ctx.managerSessionId && event.event.kind === "turn_complete") {
+          this.enqueueLifecycleEvent({ kind: "child_event", childKind: "awaiting_input", childId: session.id });
           this.enqueueWake(`session ${session.id} reached awaiting_input. last assistant message: "${(session.last_assistant_message ?? "").slice(0, 200)}"`);
         }
       }
       if (event.type === "session" && event.session.parent_session_id === ctx.managerSessionId && ["completed", "failed", "stopped"].includes(event.session.status)) {
+        this.enqueueLifecycleEvent({ kind: "child_event", childKind: childLifecycleKind(event.session.status), childId: event.session.id });
         this.enqueueWake(`session ${event.session.id} reached ${event.session.status}. last assistant message: "${(event.session.last_assistant_message ?? "").slice(0, 200)}"`);
       }
     });
@@ -112,6 +115,16 @@ export class ManagerRunnerHandle implements RunnerHandle {
       this.wakeQueue.push(notice);
     }
     this.kick();
+  }
+
+  /** Adds one visible child lifecycle event without repeating the same transition. */
+  private enqueueLifecycleEvent(event: ChildEvent): void {
+    const key = `${event.childId}:${event.childKind}`;
+    if (this.lifecycleEvents.has(key)) {
+      return;
+    }
+    this.lifecycleEvents.add(key);
+    this.queue.push(event);
   }
 
   /** Starts the manager turn processor when idle. */
@@ -264,6 +277,14 @@ export class ManagerRunnerHandle implements RunnerHandle {
   private limits() {
     return { ...DEFAULT_MANAGER_LIMITS, ...this.agent.manager_limits };
   }
+}
+
+/** Converts a terminal child session status to a manager-visible child event kind. */
+function childLifecycleKind(status: SessionStatus): ChildEvent["childKind"] {
+  if (status === "completed" || status === "failed" || status === "stopped") {
+    return status;
+  }
+  return "notice";
 }
 
 /** Reads the optional user-configured manager prompt markdown file. */
