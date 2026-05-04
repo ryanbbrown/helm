@@ -27,6 +27,7 @@ export { ArchiveSafetyError } from "./workspace/types";
 export type SessionManagerOptions = {
   config?: HelmConfig;
   configDir?: string;
+  reconcileInProcessSessions?: boolean;
   store?: Store;
   bus?: EventBus;
   workspace?: WorkspaceProvider;
@@ -73,6 +74,9 @@ export class SessionManager {
     this.workspace = options.workspace ?? new LocalWorktreeProvider();
     this.cachedConfig = options.config;
     this.configDir = options.configDir;
+    if (options.reconcileInProcessSessions) {
+      this.store.reconcileInProcessSessions();
+    }
   }
 
   /** Creates a workspace-backed agent session. */

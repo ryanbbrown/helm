@@ -7,7 +7,7 @@ const DEFAULT_PORT = 7878;
 const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
 
 /** Starts the Helm HTTP/SSE daemon. */
-export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), manager = new SessionManager()): Bun.Server<unknown> {
+export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), manager = new SessionManager({ reconcileInProcessSessions: true })): Bun.Server<unknown> {
   return Bun.serve({
     hostname: "127.0.0.1",
     port,

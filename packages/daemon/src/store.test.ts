@@ -62,4 +62,41 @@ describe("Store", () => {
 
     expect(store.getSession("session-1")?.pull_request_url).toBe("https://github.com/example/repo/pull/1");
   });
+
+  test("finds only live managers and reconciles orphaned in-process sessions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-store-reconcile-"));
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+
+    store.insertSession({
+      id: "stopped-manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "stopped",
+      created_at: now,
+      updated_at: now
+    });
+    store.insertSession({
+      id: "running-manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "running",
+      created_at: now,
+      updated_at: now
+    });
+
+    expect(store.getActiveManagerSession()?.id).toBe("running-manager");
+    store.reconcileInProcessSessions();
+
+    expect(store.getSession("running-manager")?.status).toBe("stopped");
+    expect(store.getActiveManagerSession()).toBeNull();
+  });
 });

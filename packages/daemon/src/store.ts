@@ -99,8 +99,15 @@ export class Store {
 
   /** Finds the current non-archived manager session if one exists. */
   getActiveManagerSession(): Session | null {
-    const row = this.db.query<SessionRow, []>("SELECT * FROM sessions WHERE manager_mode IS NOT NULL AND status != 'archived' ORDER BY created_at DESC LIMIT 1").get();
+    const row = this.db.query<SessionRow, []>("SELECT * FROM sessions WHERE manager_mode IS NOT NULL AND status IN ('created', 'running', 'awaiting_input') ORDER BY created_at DESC LIMIT 1").get();
     return row ? parseSession(row) : null;
+  }
+
+  /** Marks sessions that lost their in-memory runner handle after daemon restart as stopped. */
+  reconcileInProcessSessions(): void {
+    this.db
+      .query("UPDATE sessions SET status = 'stopped', pid = NULL, updated_at = ? WHERE status IN ('created', 'running', 'awaiting_input')")
+      .run(new Date().toISOString());
   }
 
   /** Reads one session by id. */
