@@ -114,3 +114,11 @@ If a change implies a spec update, do not land the code change without updating 
   - `references/1code/`, `references/agent-orchestrator/`, `references/maestro/`, `references/nimbalyst/` — comparable agent orchestration products.
 
 These are submodules. Do not edit them; they are external reference only.
+
+## 11. Running Helm locally
+
+When starting the daemon from this repo for interactive use, load the repo `.env` so manager sessions inherit `OPENROUTER_API_KEY`:
+
+`bun --env-file=.env run --cwd packages/cli start daemon start`
+
+Starting the daemon without `.env` will let normal sessions work, but manager sessions fail when they first call OpenRouter.
