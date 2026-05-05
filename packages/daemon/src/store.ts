@@ -1,11 +1,18 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
-import { databasePath, type NormalizedEvent, type Session, type SessionEvent, type SessionStatus } from "@helm/core";
+import { databasePath, type NormalizedEvent, type Session, type SessionEvent } from "@helm/core";
 import { applyMigrations } from "./migrations";
+import type { ManagerChatMessage } from "./runner/openrouter";
 
 type SessionRow = Omit<Session, "pid"> & { pid: number | null };
 type EventRow = Omit<SessionEvent, "payload"> & { payload: string };
+export type ManagerMessageRow = {
+  id: number;
+  session_id: string;
+  payload: string;
+  created_at: string;
+};
 
 export type NewSession = Pick<Session, "id" | "repo_name" | "agent_name" | "branch" | "worktree_path" | "status" | "created_at" | "updated_at">
   & Partial<Pick<Session, "workspace_uri" | "parent_session_id" | "manager_mode">>;
@@ -99,15 +106,47 @@ export class Store {
 
   /** Finds the current non-archived manager session if one exists. */
   getActiveManagerSession(): Session | null {
-    const row = this.db.query<SessionRow, []>("SELECT * FROM sessions WHERE manager_mode IS NOT NULL AND status IN ('created', 'running', 'awaiting_input') ORDER BY created_at DESC LIMIT 1").get();
+    const row = this.db.query<SessionRow, []>("SELECT * FROM sessions WHERE manager_mode IS NOT NULL AND status IN ('created', 'running', 'awaiting_input', 'interrupted') ORDER BY created_at DESC LIMIT 1").get();
     return row ? parseSession(row) : null;
   }
 
-  /** Marks sessions that lost their in-memory runner handle after daemon restart as stopped. */
+  /** Marks sessions that lost their in-memory runner handle after daemon restart as interrupted. */
   reconcileInProcessSessions(): void {
     this.db
-      .query("UPDATE sessions SET status = 'stopped', pid = NULL, updated_at = ? WHERE status IN ('created', 'running', 'awaiting_input')")
+      .query("UPDATE sessions SET status = 'interrupted', pid = NULL, updated_at = ? WHERE status IN ('created', 'running', 'awaiting_input')")
       .run(new Date().toISOString());
+  }
+
+  /** Appends one OpenAI-compatible manager message. */
+  insertManagerMessage(sessionId: string, message: ManagerChatMessage): void {
+    this.db
+      .query("INSERT INTO manager_messages (session_id, payload, created_at) VALUES (?, ?, ?)")
+      .run(sessionId, JSON.stringify(message), new Date().toISOString());
+  }
+
+  /** Lists ordered manager messages, repairing incomplete tool-call tails. */
+  listManagerMessages(sessionId: string): ManagerChatMessage[] {
+    const messages = this.db
+      .query<ManagerMessageRow, [string]>("SELECT * FROM manager_messages WHERE session_id = ? ORDER BY id ASC")
+      .all(sessionId)
+      .map((row) => JSON.parse(row.payload) as ManagerChatMessage);
+    const repaired = repairManagerMessageTail(messages);
+    if (repaired.length !== messages.length) {
+      const insert = this.db.query("INSERT INTO manager_messages (session_id, payload, created_at) VALUES (?, ?, ?)");
+      const now = new Date().toISOString();
+      this.db.transaction(() => {
+        for (const message of repaired.slice(messages.length)) {
+          insert.run(sessionId, JSON.stringify(message), now);
+        }
+      })();
+    }
+    return repaired;
+  }
+
+  /** Returns whether a manager transcript exists. */
+  hasManagerMessages(sessionId: string): boolean {
+    const row = this.db.query<{ value: number }, [string]>("SELECT 1 AS value FROM manager_messages WHERE session_id = ? LIMIT 1").get(sessionId);
+    return Boolean(row);
   }
 
   /** Reads one session by id. */
@@ -128,6 +167,44 @@ export class Store {
   listAllEvents(afterId = 0): SessionEvent[] {
     return this.db.query<EventRow, [number]>("SELECT * FROM session_events WHERE id > ? ORDER BY id ASC").all(afterId).map(parseEvent);
   }
+}
+
+/** Synthesizes interrupted tool results for a dangling assistant tool-call batch. */
+function repairManagerMessageTail(messages: ManagerChatMessage[]): ManagerChatMessage[] {
+  const assistantIndex = findLastAssistantToolCallIndex(messages);
+  if (assistantIndex === -1) {
+    return messages;
+  }
+  const assistant = messages[assistantIndex];
+  const toolCalls = assistant?.tool_calls ?? [];
+  const following = messages.slice(assistantIndex + 1);
+  if (following.some((message) => message.role !== "tool")) {
+    return messages;
+  }
+  const resolved = new Set(following.map((message) => message.tool_call_id).filter((id): id is string => Boolean(id)));
+  const missing = toolCalls.filter((toolCall) => !resolved.has(toolCall.id));
+  if (missing.length === 0) {
+    return messages;
+  }
+  return [
+    ...messages,
+    ...missing.map((toolCall) => ({
+      role: "tool" as const,
+      tool_call_id: toolCall.id,
+      content: JSON.stringify({ ok: false, errorMessage: "interrupted" })
+    }))
+  ];
+}
+
+/** Finds the last assistant message that requested tool calls. */
+function findLastAssistantToolCallIndex(messages: ManagerChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && (message.tool_calls?.length ?? 0) > 0) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 /** Parses a persisted session row. */

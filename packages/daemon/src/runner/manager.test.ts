@@ -6,7 +6,7 @@ import { ManagerRunnerAdapter, type ManagerRunnerHandle } from "./manager";
 import { SessionManager } from "../session-manager";
 import { Store } from "../store";
 import type { AgentConfig, NormalizedEvent } from "@helm/core";
-import type { ManagerChatClient, ManagerChatCompletion, ManagerChatCompletionInput } from "./openrouter";
+import type { ManagerChatClient, ManagerChatCompletion, ManagerChatCompletionInput, ManagerChatMessage } from "./openrouter";
 import type { HelmConfig } from "../config-loader";
 
 describe("ManagerRunnerAdapter", () => {
@@ -68,6 +68,114 @@ describe("ManagerRunnerAdapter", () => {
       kind: "assistant_message",
       payload: { kind: "assistant_message", text: "checking child output" }
     }));
+    await handle.stop();
+  });
+
+  test("persists manager conversation messages in OpenAI order", async () => {
+    const fixture = createLoopFixture();
+    const stored: Array<{ sessionId: string; message: unknown }> = [];
+    const client = new FakeManagerChatClient([
+      {
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call-1", type: "function", function: { name: "missing_tool", arguments: "{}" } }]
+        },
+        finishReason: "tool_calls"
+      },
+      { message: { role: "assistant", content: "done" }, finishReason: "stop" }
+    ]);
+    const handle = new ManagerRunnerAdapter(fixture.agent, { manager: fixture.manager, managerSessionId: "manager" }, client).spawn({
+      command: "manager",
+      cwd: "",
+      extraArgs: [],
+      initialPrompt: "start",
+      managerConversation: {
+        append: (sessionId, message) => stored.push({ sessionId, message }),
+        load: () => []
+      },
+      logPath: join(fixture.dir, "manager.jsonl")
+    }) as ManagerRunnerHandle;
+
+    await nextEvent(handle.events);
+    handle.resolveToolCall("call-1", true);
+    await collectUntil(handle.events, "turn_complete");
+
+    expect(stored.map((entry) => (entry.message as { role: string }).role)).toEqual(["system", "user", "user", "assistant", "tool", "assistant"]);
+    expect(stored.every((entry) => entry.sessionId === "manager")).toBe(true);
+    await handle.stop();
+  });
+
+  test("queues user messages while approval-mode tool calls are pending", async () => {
+    const fixture = createLoopFixture();
+    const stored: Array<{ sessionId: string; message: ManagerChatMessage }> = [];
+    const client = new FakeManagerChatClient([
+      {
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call-1", type: "function", function: { name: "missing_tool", arguments: "{}" } }]
+        },
+        finishReason: "tool_calls"
+      },
+      { message: { role: "assistant", content: "first done" }, finishReason: "stop" },
+      { message: { role: "assistant", content: "second done" }, finishReason: "stop" }
+    ]);
+    const handle = new ManagerRunnerAdapter(fixture.agent, { manager: fixture.manager, managerSessionId: "manager" }, client).spawn({
+      command: "manager",
+      cwd: "",
+      extraArgs: [],
+      initialPrompt: "start",
+      managerConversation: {
+        append: (sessionId, message) => stored.push({ sessionId, message }),
+        load: () => []
+      },
+      logPath: join(fixture.dir, "manager.jsonl")
+    }) as ManagerRunnerHandle;
+
+    await nextEvent(handle.events);
+    await handle.send("while waiting");
+    handle.resolveToolCall("call-1", true);
+    await collectUntil(handle.events, "turn_complete");
+    await collectUntil(handle.events, "turn_complete");
+
+    expect(stored.map((entry) => entry.message.role)).toEqual(["system", "user", "user", "assistant", "tool", "assistant", "user", "user", "assistant"]);
+    expect(stored[3]?.message).toMatchObject({ role: "assistant", tool_calls: expect.any(Array) });
+    expect(stored[4]?.message).toMatchObject({ role: "tool", tool_call_id: "call-1" });
+    expect(stored[6]?.message).toMatchObject({ role: "user", content: "while waiting" });
+    await handle.stop();
+  });
+
+  test("resumes with repaired manager tool-call tails before new user input", async () => {
+    const fixture = createLoopFixture();
+    const client = new FakeManagerChatClient([
+      { message: { role: "assistant", content: "resumed" }, finishReason: "stop" }
+    ]);
+    const handle = new ManagerRunnerAdapter(fixture.agent, { manager: fixture.manager, managerSessionId: "manager" }, client).spawn({
+      command: "manager",
+      cwd: "",
+      extraArgs: [],
+      isResume: true,
+      managerConversation: {
+        append: () => undefined,
+        load: () => [
+          { role: "system", content: "system" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ id: "call-1", type: "function", function: { name: "read_diff", arguments: "{}" } }]
+          },
+          { role: "tool", tool_call_id: "call-1", content: JSON.stringify({ ok: false, errorMessage: "interrupted" }) }
+        ]
+      },
+      logPath: join(fixture.dir, "manager.jsonl")
+    }) as ManagerRunnerHandle;
+
+    await handle.send("continue");
+    await collectUntil(handle.events, "turn_complete");
+
+    expect(client.calls[0]?.messages.map((message) => message.role)).toEqual(["system", "assistant", "tool", "user", "user"]);
+    expect(client.calls[0]?.messages[2]).toMatchObject({ role: "tool", tool_call_id: "call-1" });
     await handle.stop();
   });
 });

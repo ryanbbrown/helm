@@ -5,6 +5,7 @@ export type SessionStatus =
   | "created"
   | "running"
   | "awaiting_input"
+  | "interrupted"
   | "completed"
   | "failed"
   | "stopped"

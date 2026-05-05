@@ -58,7 +58,12 @@ export class ManagerRunnerHandle implements RunnerHandle {
     private opts: RunnerSpawnOptions
   ) {
     this.events = this.queue;
-    this.messages = [{ role: "system", content: renderSystemPrompt(ctx.managerSessionId, readManagerPrompt(agent.system_prompt_path)) }];
+    if (opts.isResume) {
+      this.messages = opts.managerConversation?.load(ctx.managerSessionId) ?? [];
+    } else {
+      this.messages = [];
+      this.appendMessage({ role: "system", content: renderSystemPrompt(ctx.managerSessionId, readManagerPrompt(agent.system_prompt_path)) });
+    }
     this.unsubscribe = ctx.manager.subscribe((event) => {
       if (event.type === "event") {
         const session = ctx.manager.get(event.event.session_id);
@@ -157,12 +162,12 @@ export class ManagerRunnerHandle implements RunnerHandle {
         return;
       }
       for (const userMessage of userMessages) {
-        this.messages.push({ role: "user", content: userMessage });
+        this.appendMessage({ role: "user", content: userMessage });
       }
-      this.messages.push({ role: "user", content: await renderStateSnapshot(this.ctx, wakeNotice ? { wakeNotice } : {}) });
+      this.appendMessage({ role: "user", content: await renderStateSnapshot(this.ctx, wakeNotice ? { wakeNotice } : {}) });
       const emitted = await this.runOneTurn();
       if (!emitted && wakeNotice) {
-        this.messages.push({ role: "assistant", content: "" });
+        this.appendMessage({ role: "assistant", content: "" });
       }
       if (this.wakeQueue.length === 0 && this.userQueue.length === 0) {
         return;
@@ -186,7 +191,7 @@ export class ManagerRunnerHandle implements RunnerHandle {
       });
       writeJsonLine(this.opts.logPath, { type: "usage", usage: response.usage });
       const assistant = response.message;
-      this.messages.push(assistant);
+      this.appendMessage(assistant);
       if (assistant.content?.trim()) {
         this.queue.push({ kind: "assistant_message", text: assistant.content });
         emittedVisibleOutput = true;
@@ -201,8 +206,7 @@ export class ManagerRunnerHandle implements RunnerHandle {
         await this.appendToolErrors(toolCalls, "max_tool_calls_per_batch");
         continue;
       }
-      const results = await this.executeToolBatch(toolCalls, this.currentMode());
-      this.messages.push(...results);
+      await this.executeToolBatch(toolCalls, this.currentMode());
     }
     this.queue.push({ kind: "error", message: "max_tool_iterations_per_turn" });
     this.queue.push({ kind: "turn_complete" });
@@ -232,7 +236,9 @@ export class ManagerRunnerHandle implements RunnerHandle {
       if (!approved) {
         const result = { ok: false, errorMessage: "denied_by_user" };
         this.queue.push({ kind: "tool_result", toolCallId: toolCall.id, toolName: toolCall.function.name, ...result, result });
-        results.push(toolMessage(toolCall.id, result));
+        const message = toolMessage(toolCall.id, result);
+        this.appendMessage(message);
+        results.push(message);
         continue;
       }
       const result = await executeManagerTool(toolCall.function.name, args, this.ctx);
@@ -247,7 +253,9 @@ export class ManagerRunnerHandle implements RunnerHandle {
       for (const childEvent of result.childEvents ?? []) {
         this.queue.push(childEvent);
       }
-      results.push(toolMessage(toolCall.id, { ok: result.ok, result: result.result, errorMessage: result.errorMessage }));
+      const message = toolMessage(toolCall.id, { ok: result.ok, result: result.result, errorMessage: result.errorMessage });
+      this.appendMessage(message);
+      results.push(message);
     }
     return results;
   }
@@ -264,8 +272,14 @@ export class ManagerRunnerHandle implements RunnerHandle {
     for (const toolCall of toolCalls) {
       const result = { ok: false, errorMessage };
       this.queue.push({ kind: "tool_result", toolCallId: toolCall.id, toolName: toolCall.function.name, result, ...result });
-      this.messages.push(toolMessage(toolCall.id, result));
+      this.appendMessage(toolMessage(toolCall.id, result));
     }
+  }
+
+  /** Appends one message to memory and the optional durable transcript. */
+  private appendMessage(message: ManagerChatMessage): void {
+    this.messages.push(message);
+    this.opts.managerConversation?.append(this.ctx.managerSessionId, message);
   }
 
   /** Reads the manager's current operating mode. */

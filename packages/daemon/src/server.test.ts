@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
@@ -109,6 +109,38 @@ describe("daemon manager route", () => {
   });
 });
 
+describe("daemon resume route", () => {
+  test("resumes interrupted sessions through the HTTP API", async () => {
+    const fixture = createResumeFixture("success");
+    const server = startServer(0, token, fixture.manager);
+    try {
+      const response = await resume(server, fixture.sessionId);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: fixture.sessionId, status: "awaiting_input" });
+      expect(fixture.manager.listEvents(fixture.sessionId)).toContainEqual(expect.objectContaining({
+        kind: "session_resumed",
+        payload: { kind: "session_resumed", sessionId: fixture.sessionId }
+      }));
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("returns structured resume errors through the HTTP API", async () => {
+    const fixture = createResumeFixture("not-resumable", "stopped");
+    const server = startServer(0, token, fixture.manager);
+    try {
+      const response = await resume(server, fixture.sessionId);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "not_resumable" });
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
 describe("daemon pull request route", () => {
   test("creates a pull request, persists the URL, and is idempotent", async () => {
     const fixture = createPullRequestFixture("pr-create");
@@ -164,6 +196,11 @@ type ManagerFixture = {
   manager: SessionManager;
 };
 
+type ResumeFixture = {
+  manager: SessionManager;
+  sessionId: string;
+};
+
 type ArchiveRequestOptions = {
   body?: BodyInit;
   headers?: HeadersInit;
@@ -194,6 +231,14 @@ function createPullRequest(server: Bun.Server<unknown>, sessionId: string, body:
   });
 }
 
+/** Posts to the resume route on a test server. */
+function resume(server: Bun.Server<unknown>, sessionId: string): Promise<Response> {
+  return fetch(`http://${server.hostname}:${server.port}/sessions/${sessionId}/resume`, {
+    headers: { Authorization: `Bearer ${token}` },
+    method: "POST"
+  });
+}
+
 /** Creates a session manager configured with a manager agent. */
 function createManagerFixture(name: string): ManagerFixture {
   const dir = mkdtempSync(join(tmpdir(), `helm-server-manager-${name}-`));
@@ -203,6 +248,32 @@ function createManagerFixture(name: string): ManagerFixture {
     agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" }]
   };
   return { manager: new SessionManager({ config, store }) };
+}
+
+/** Creates an interrupted child session fixture for server resume tests. */
+function createResumeFixture(name: string, status: "interrupted" | "stopped" = "interrupted"): ResumeFixture {
+  const dir = mkdtempSync(join(tmpdir(), `helm-server-resume-${name}-`));
+  const worktreePath = join(dir, "worktree");
+  mkdirSync(worktreePath);
+  const store = new Store(join(dir, "helm.db"));
+  const sessionId = `session-${name}`;
+  const now = new Date().toISOString();
+  store.insertSession({
+    id: sessionId,
+    repo_name: "fixture",
+    agent_name: "codex",
+    branch: `helm/${sessionId}`,
+    worktree_path: worktreePath,
+    status,
+    created_at: now,
+    updated_at: now
+  });
+  store.updateSession(sessionId, { agent_thread_id: "thread-1", pid: null });
+  const config: HelmConfig = {
+    repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+    agents: [{ name: "codex", command: join(dir, "missing-codex"), args: [], headless_mode: "codex_exec" }]
+  };
+  return { manager: new SessionManager({ config, store }), sessionId };
 }
 
 /** Creates a repo, dirty-able worktree, and session row for server archive tests. */

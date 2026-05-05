@@ -13,6 +13,7 @@ type SessionDetailProps = {
   events: PublicSessionEvent[];
   diffRefreshToken: number;
   onRefresh: () => void;
+  onResume: () => void;
   onSend: (text: string) => Promise<void>;
   onStop: () => void;
   onSessionUpdate: (session: PublicSession) => void;
@@ -21,13 +22,13 @@ type SessionDetailProps = {
 };
 
 /** Renders the selected session detail pane. */
-export function SessionDetail({ session, events, diffRefreshToken, onRefresh, onSend, onStop, onSessionUpdate, onApproveToolCall, onDenyToolCall }: SessionDetailProps) {
+export function SessionDetail({ session, events, diffRefreshToken, onRefresh, onResume, onSend, onStop, onSessionUpdate, onApproveToolCall, onDenyToolCall }: SessionDetailProps) {
   const [showDiff, setShowDiff] = useState(false);
   const timeline = <MessageTimeline events={events} onApproveToolCall={onApproveToolCall} onDenyToolCall={onDenyToolCall} />;
   const canShowDiff = !session.manager_mode;
   return (
     <div className="detail">
-      <Header session={session} showDiff={showDiff} onRefresh={onRefresh} onStop={onStop} onToggleDiff={canShowDiff ? () => setShowDiff((current) => !current) : undefined} />
+      <Header session={session} showDiff={showDiff} onRefresh={onRefresh} onResume={onResume} onStop={onStop} onToggleDiff={canShowDiff ? () => setShowDiff((current) => !current) : undefined} />
       {showDiff && canShowDiff ? (
         <ResizableSplit
           storageKey={`helm.diffSplit.${session.id}`}
@@ -35,7 +36,7 @@ export function SessionDetail({ session, events, diffRefreshToken, onRefresh, on
           right={<SessionDiff session={session} events={events} diffRefreshToken={diffRefreshToken} onSessionUpdate={onSessionUpdate} />}
         />
       ) : timeline}
-      <Composer disabled={["archived", "failed", "stopped"].includes(session.status)} onSend={onSend} />
+      <Composer disabled={["archived", "failed", "interrupted", "stopped"].includes(session.status)} onSend={onSend} />
     </div>
   );
 }

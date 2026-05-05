@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   DIFF_FILE_COUNT_LIMIT,
   DIFF_FILE_SIZE_LIMIT,
@@ -15,7 +16,7 @@ import { findAgent, findRepo, loadConfig, type HelmConfig } from "./config-loade
 import { gitRefExists } from "./git";
 import { Store } from "./store";
 import { createRunnerAdapter } from "./runner";
-import type { RunnerHandle } from "./runner/types";
+import type { ManagerConversationStore, RunnerHandle } from "./runner/types";
 import { EventBus, type BusEvent } from "./event-bus";
 import { LocalWorktreeProvider } from "./workspace/local";
 import { NullWorkspaceProvider } from "./workspace/null";
@@ -23,6 +24,25 @@ import type { WorkspaceProvider } from "./workspace/types";
 import type { ManagerMode } from "@helm/core";
 
 export { ArchiveSafetyError } from "./workspace/types";
+
+export type SessionOperationErrorCode =
+  | "archived"
+  | "manager_exists"
+  | "missing_manager_transcript"
+  | "missing_resume_thread"
+  | "missing_worktree"
+  | "not_resumable";
+
+export class SessionOperationError extends Error {
+  /** Creates a structured session operation error. */
+  constructor(
+    readonly code: SessionOperationErrorCode,
+    readonly status = 409,
+    readonly details?: string
+  ) {
+    super(code);
+  }
+}
 
 export type SessionManagerOptions = {
   config?: HelmConfig;
@@ -64,6 +84,7 @@ export class SessionManager {
   private workspace: WorkspaceProvider;
   private nullWorkspace = new NullWorkspaceProvider();
   private handles = new Map<string, RunnerHandle>();
+  private resumeLocks = new Map<string, Promise<Session>>();
   private cachedConfig?: HelmConfig;
   private configDir?: string;
 
@@ -158,6 +179,7 @@ export class SessionManager {
       cwd: workspace.cwd ?? "",
       extraArgs: agent.args,
       initialPrompt: input.prompt,
+      managerConversation: agent.headless_mode === "manager_loop" ? this.managerConversationStore() : undefined,
       logPath: logPath(id),
       sessionId: id,
       onThreadId: (threadId) => this.patch(id, { agent_thread_id: threadId })
@@ -170,6 +192,74 @@ export class SessionManager {
       throw new Error(`Failed to read created session: ${id}`);
     }
     return session;
+  }
+
+  /** Recreates an in-memory runner handle for an interrupted session. */
+  async resume(id: string): Promise<Session> {
+    const existing = this.resumeLocks.get(id);
+    if (existing) {
+      return existing;
+    }
+    const operation = this.resumeUnlocked(id).finally(() => {
+      if (this.resumeLocks.get(id) === operation) {
+        this.resumeLocks.delete(id);
+      }
+    });
+    this.resumeLocks.set(id, operation);
+    return operation;
+  }
+
+  /** Recreates an in-memory runner handle after acquiring the resume lock. */
+  private async resumeUnlocked(id: string): Promise<Session> {
+    const session = this.getRequired(id);
+    if (session.status === "archived") {
+      throw new SessionOperationError("archived");
+    }
+    if (this.handles.has(id)) {
+      return session;
+    }
+    if (session.status !== "interrupted") {
+      throw new SessionOperationError("not_resumable");
+    }
+    const config = await this.loadHelmConfig();
+    const repo = findRepo(config, session.repo_name);
+    const agent = findAgent(config, session.agent_name);
+    if (session.manager_mode) {
+      if (!this.store.hasManagerMessages(id)) {
+        throw new SessionOperationError("missing_manager_transcript");
+      }
+      const active = this.store.getActiveManagerSession();
+      if (active && active.id !== id) {
+        throw new SessionOperationError("manager_exists");
+      }
+    } else {
+      if (!session.worktree_path || !session.agent_thread_id) {
+        throw new SessionOperationError("missing_resume_thread");
+      }
+      if (!existsSync(session.worktree_path)) {
+        throw new SessionOperationError("missing_worktree");
+      }
+      this.workspace.fromSession({ repo, session });
+    }
+    const adapter = createRunnerAdapter(agent, {
+      managerContext: agent.headless_mode === "manager_loop" ? { manager: this, managerSessionId: id } : undefined
+    });
+    const handle = adapter.spawn({
+      command: agent.command,
+      cwd: session.worktree_path ?? "",
+      extraArgs: agent.args,
+      isResume: true,
+      managerConversation: session.manager_mode ? this.managerConversationStore() : undefined,
+      resumeThreadId: session.manager_mode ? undefined : session.agent_thread_id ?? undefined,
+      logPath: logPath(id),
+      sessionId: id,
+      onThreadId: (threadId) => this.patch(id, { agent_thread_id: threadId })
+    });
+    this.handles.set(id, handle);
+    this.patch(id, { pid: handle.pid, status: "awaiting_input" });
+    this.persistEvent(id, { kind: "session_resumed", sessionId: id });
+    void this.consumeEvents(id, handle);
+    return this.getRequired(id);
   }
 
   /** Returns the validated Helm config. */
@@ -196,7 +286,7 @@ export class SessionManager {
     this.persistEvent(id, { kind: "user_message", text });
     try {
       await handle.send(text);
-      this.patch(id, { status: "running" });
+      this.patch(id, { pid: handle.pid, status: "running" });
     } catch (error) {
       this.patch(id, { status: previous.status });
       throw error;
@@ -393,6 +483,14 @@ export class SessionManager {
     if (session) {
       this.bus.publish({ type: "session", session });
     }
+  }
+
+  /** Returns the manager transcript persistence callbacks for runner handles. */
+  private managerConversationStore(): ManagerConversationStore {
+    return {
+      append: (sessionId, message) => this.store.insertManagerMessage(sessionId, message),
+      load: (sessionId: string) => this.store.listManagerMessages(sessionId)
+    };
   }
 
   /** Resolves a pending tool call on a live manager handle. */

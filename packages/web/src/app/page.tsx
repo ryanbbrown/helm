@@ -13,6 +13,7 @@ import {
   getConfig,
   getSession,
   listSessions,
+  resumeSession,
   sendMessage,
   stopSession,
   type HelmConfig
@@ -132,6 +133,15 @@ export default function Page() {
     mergeSession(session);
   }
 
+  /** Resumes the selected interrupted session. */
+  async function onResume(): Promise<void> {
+    if (!selectedId) {
+      return;
+    }
+    const session = await resumeSession(selectedId);
+    mergeSession(session);
+  }
+
   /** Stops the selected session. */
   async function onStop(): Promise<void> {
     if (!selectedId) {
@@ -222,6 +232,7 @@ export default function Page() {
             events={events}
             diffRefreshToken={diffRefreshToken}
             onRefresh={refresh}
+            onResume={() => void onResume()}
             onSend={onSend}
             onStop={() => void onStop()}
             onSessionUpdate={mergeSession}

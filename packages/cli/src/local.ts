@@ -1,9 +1,13 @@
 import { SessionManager } from "@helm/daemon";
 import type { Session, SessionEvent } from "@helm/core";
 
+type LocalManagerOptions = {
+  reconcileInProcessSessions?: boolean;
+};
+
 /** Creates a local in-process manager. */
-export function createLocalManager(): SessionManager {
-  return new SessionManager();
+export function createLocalManager(options: LocalManagerOptions = {}): SessionManager {
+  return new SessionManager({ reconcileInProcessSessions: options.reconcileInProcessSessions ?? false });
 }
 
 /** Streams events for a local session manager. */

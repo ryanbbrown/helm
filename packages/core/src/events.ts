@@ -1,5 +1,6 @@
 export type SessionEventKind =
   | "session_started"
+  | "session_resumed"
   | "user_message"
   | "thinking"
   | "assistant_message"
@@ -17,6 +18,11 @@ export type SessionStartedEvent = {
   repo: string;
   branch: string | null;
   worktreePath: string | null;
+};
+
+export type SessionResumedEvent = {
+  kind: "session_resumed";
+  sessionId: string;
 };
 
 export type ThinkingEvent = {
@@ -84,6 +90,7 @@ export type ExitEvent = {
 
 export type NormalizedEvent =
   | SessionStartedEvent
+  | SessionResumedEvent
   | UserMessageEvent
   | ThinkingEvent
   | AssistantMessageEvent
@@ -99,6 +106,7 @@ export type PublicSessionStartedEvent = Omit<SessionStartedEvent, "worktreePath"
 
 export type PublicNormalizedEvent =
   | PublicSessionStartedEvent
+  | SessionResumedEvent
   | UserMessageEvent
   | ThinkingEvent
   | AssistantMessageEvent

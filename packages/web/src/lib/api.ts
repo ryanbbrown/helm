@@ -46,6 +46,11 @@ export async function sendMessage(id: string, text: string): Promise<PublicSessi
   return request(`/sessions/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
 }
 
+/** Resumes an interrupted session. */
+export async function resumeSession(id: string): Promise<PublicSession> {
+  return request(`/sessions/${id}/resume`, { method: "POST" });
+}
+
 /** Stops a running session. */
 export async function stopSession(id: string): Promise<PublicSession> {
   return request(`/sessions/${id}/stop`, { method: "POST" });

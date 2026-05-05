@@ -170,7 +170,7 @@ The runner adapter owns the headless flags (see §7.2).
 | `manager_mode` | enum? | null for normal sessions; `approval` or `autopilot` for manager sessions, default `approval` |
 | `agent_thread_id` | text? | Adapter-supplied thread/session id used for resume (e.g. Claude SDK `session_id`, Codex `thread.id`) |
 | `pid` | int? | Agent process pid (null when not running) |
-| `status` | enum | `created` \| `running` \| `awaiting_input` \| `completed` \| `failed` \| `stopped` \| `archived` |
+| `status` | enum | `created` \| `running` \| `awaiting_input` \| `interrupted` \| `completed` \| `failed` \| `stopped` \| `archived` |
 | `last_assistant_message` | text? | Most recent final assistant message |
 | `last_event_at` | timestamp? | Time of most recent event ingestion |
 | `pull_request_url` | text? | GitHub PR URL created for the session branch via `gh` |
@@ -187,6 +187,17 @@ The runner adapter owns the headless flags (see §7.2).
 | `payload` | json | Normalized event |
 | `created_at` | timestamp | |
 
+#### 5.1.5 `ManagerMessage` (persisted in SQLite, append-only)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | int PK | Autoincrement |
+| `session_id` | text | FK to the manager session |
+| `payload` | json | Full OpenAI-compatible `ManagerChatMessage` JSON, including `role`, `content`, `tool_calls`, `tool_call_id`, and `name` when present |
+| `created_at` | timestamp | |
+
+Replay reads one manager session with `WHERE session_id = ? ORDER BY id`, so the store maintains a composite `(session_id, id)` index. The `role` lives only inside `payload`; it is not duplicated in a separate column.
+
 ### 5.2 Status Transitions
 
 ```
@@ -194,14 +205,17 @@ created ──start──▶ running ──final assistant msg──▶ awaiting
                       │                                    │
                       │                                    └──user msg──▶ running
                       │
+                      ├──daemon restart──▶ interrupted ──user resume──▶ awaiting_input
                       ├──exit 0──▶ completed
                       ├──exit !=0─▶ failed
                       └──user stop─▶ stopped ──user archive──▶ archived
 
-awaiting_input / completed / failed / stopped ──user archive──▶ archived
+awaiting_input ──daemon restart──▶ interrupted
+
+awaiting_input / interrupted / completed / failed / stopped ──user archive──▶ archived
 ```
 
-`stopped` keeps the worktree on disk and the session visible in default listings; `archived` removes the worktree + branch and hides the session.
+`interrupted` means the daemon lost the in-memory runner handle during restart. `stopped` means the user intentionally stopped the session. Both keep the worktree on disk and the session visible in default listings; `archived` removes the worktree + branch and hides the session.
 
 ## 6. Session Lifecycle
 
@@ -268,7 +282,7 @@ For each running agent the adapter MUST:
 2. Stream parsed events to the session manager.
 3. Expose `send(text)`, `stop()`, and an `events` async iterable (see §7.4).
 
-**Tmux is deferred.** The spec originally required tmux + fifos for survival across daemon restarts; the MVP drops this for simplicity. Trade-off: when the owning Helm process exits, running agents die. SQLite + the JSONL log preserve every observed event up to that point. Reintroducing tmux durability is a phase 3+ concern (see plan).
+When the daemon starts, sessions that were `created`, `running`, or `awaiting_input` are reconciled to `interrupted` with `pid = null`. User-initiated stop remains `stopped`. Interrupted sessions are visible recovery candidates and can be resumed explicitly; stopped sessions are not resumed because stop is an intentional user action.
 
 ### 7.2 Headless Mode Adapters
 
@@ -279,6 +293,8 @@ Spawn:
 claude --print --input-format stream-json --output-format stream-json \
        --include-partial-messages --verbose <user-args>
 ```
+
+Claude resume is lazy. Rehydrating an interrupted Claude session restores an in-memory handle from `sessions.agent_thread_id`, sets status to `awaiting_input`, and does not spawn `claude --resume <session_id>` until the next user message.
 
 Stdin: newline-delimited JSON, one event per line:
 ```jsonc
@@ -303,6 +319,8 @@ Follow-up turns (one process per turn):
 codex exec resume <thread_id> --json <user-args> "<follow-up>"
 ```
 
+Codex resume is lazy. Rehydrating an interrupted Codex session restores an in-memory handle from `sessions.agent_thread_id`, sets status to `awaiting_input`, and does not spawn `codex exec resume` until the next user message.
+
 Stdout: newline-delimited JSON events. Events the runner cares about:
 - `thread.started`: contains `thread.id`. Capture and persist as `agent_thread_id` for resume.
 - `turn.started`: marks beginning of an agent turn (used to flip status to `running`/emit `thinking`).
@@ -320,6 +338,7 @@ The runner translates adapter-specific events into a shared `SessionEvent` shape
 | `kind` | Surfaced to UI? | Notes |
 |---|---|---|
 | `session_started` | ✓ | Includes session id, repo, branch, worktree path |
+| `session_resumed` | ✓ | Explicit recovery of an interrupted session |
 | `user_message` | ✓ | Initial prompt and follow-up messages sent by the user |
 | `thinking` | ✓ (as indicator) | Emitted on first non-result delta after a user msg |
 | `assistant_message` | ✓ | Final, post-turn assistant text. Only this is shown. |
@@ -331,7 +350,7 @@ The runner translates adapter-specific events into a shared `SessionEvent` shape
 | `error` | ✓ | Surfaces failure to UI |
 | `exit` | ✓ | Process exited |
 
-The MVP UI contract is: **show `session_started`, `user_message`, `thinking`, `assistant_message`, manager tool events, `child_event`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas and adapter-specific tool events are kept in the raw JSONL log, not persisted as normalized timeline events; only the final assistant message of each turn is surfaced.
+The MVP UI contract is: **show `session_started`, `session_resumed`, `user_message`, `thinking`, `assistant_message`, manager tool events, `child_event`, `error`, and `exit`. Suppress everything else.** Intermediate streamed deltas and adapter-specific tool events are kept in the raw JSONL log, not persisted as normalized timeline events; only the final assistant message of each turn is surfaced.
 
 `diff_changed` is a live-only SSE hint that tells the UI the worktree diff for a session may have changed. It carries no payload beyond `{ kind: "diff_changed", sessionId }`, is not persisted as a normalized event, and is not replayed from SQLite.
 
@@ -345,7 +364,7 @@ interface RunnerAdapter {
     cwd: string;             // worktree path
     extraArgs: string[];     // from agents.json
     initialPrompt?: string;
-    resumeThreadId?: string; // present iff this is a follow-up
+    resumeThreadId?: string; // CLI-owned transcript id for resumed child agents
   }): RunnerHandle;
 }
 
@@ -353,7 +372,7 @@ interface RunnerHandle {
   events: AsyncIterable<NormalizedEvent>;
   send(userText: string): Promise<void>;  // claude: write stdin; codex: re-spawn with resume
   stop(): Promise<void>;
-  pid: number;
+  pid: number | null;
 }
 ```
 
@@ -366,6 +385,8 @@ The session manager consumes `events`, persists them, and never branches on whic
 There is at most one non-archived manager session. Manager sessions have no worktree (`branch`, `worktree_path`, and `workspace_uri` are null). Children are normal sessions with `parent_session_id` set to the manager id; child sessions cannot use `manager_loop`.
 
 The manager uses a static system prompt and append-only user-role state snapshots at turn boundaries. Snapshots include live sessions, recently terminated sessions, and any wake notice. Child `turn_complete` and terminal status transitions enqueue wake notices through the daemon event bus. Wakes are serialized and coalesced; if a wake produces no assistant text and no tool calls, the visible empty turn is suppressed.
+
+Manager sessions persist their OpenAI-compatible chat messages in the `manager_messages` table. New managers append the rendered system prompt, every explicit user message, every rendered state snapshot, assistant responses, and tool result messages. Resumed managers load messages ordered by insertion id and wait for a new user message or future child lifecycle event; resume does not auto-kick the manager loop. If the stored transcript ends after an assistant tool-call batch with missing tool results, Helm synthesizes `{ ok: false, errorMessage: "interrupted" }` tool messages before replay so the next OpenRouter request is valid.
 
 Manager tools:
 
@@ -432,6 +453,7 @@ On success, Helm fetches origin, pushes `helm/<id>` to origin with upstream trac
 | `helm session list [--parent <id>]` | List sessions with status (excludes `archived`) |
 | `helm session show <id>` | Print session metadata + last assistant message |
 | `helm session send <id> <text>` | Send follow-up message |
+| `helm session resume <id>` | Resume an interrupted session |
 | `helm session stop <id>` | Stop running agent (status → `stopped`); worktree preserved |
 | `helm session archive <id> [--force]` | Remove worktree + branch (status → `archived`). Requires `--force` if worktree is dirty or has unshared commits. |
 | `helm manager create <repo> <agent> [-p <prompt>] [--mode approval\|autopilot]` | Create the singleton manager |
@@ -448,6 +470,8 @@ If the daemon is reachable, every `session ...` command issues an authenticated 
 SQLite at `~/.helm/state/helm.db`. The domain schema is `sessions` and `session_events` per §5.1.3 and §5.1.4, with a `schema_migrations` table for additive migrations.
 
 Append-only `~/.helm/logs/<id>.jsonl` is the raw agent stream — both for debugging and as the source of truth for replay if the SQLite events table is rebuilt.
+
+`manager_messages` is the durable manager conversation log. Each row stores one full OpenAI-compatible message JSON payload for a manager session and is replayed by `session_id, id` order when resuming an interrupted manager.
 
 ## 11. HTTP / SSE API
 
@@ -468,6 +492,7 @@ The daemon listens on `127.0.0.1:7878` (configurable via `HELM_PORT`). All route
 | `GET` | `/sessions/:id/diff?base=branch\|uncommitted` | Returns the daemon-computed structured worktree diff for a non-archived session. Defaults to `branch`; returns `400 invalid_base`, `404` for unknown sessions, or `410 archived`. |
 | `GET` | `/sessions/:id/events` | SSE stream scoped to one session. `?after=<id>` resumes. |
 | `POST` | `/sessions/:id/messages` | Sends a follow-up. Body: `{ text }`. |
+| `POST` | `/sessions/:id/resume` | Rehydrates an `interrupted` session and returns the updated session. Returns `409 archived`, `manager_exists`, `not_resumable`, `missing_resume_thread`, `missing_worktree`, or `missing_manager_transcript` when recovery is invalid. |
 | `PATCH` | `/sessions/:id/manager-mode` | Updates a manager's mode. Body: `{ manager_mode: "approval" \| "autopilot" }`. |
 | `POST` | `/sessions/:id/tool-calls/:toolCallId/approve` | Approves a pending manager tool call. |
 | `POST` | `/sessions/:id/tool-calls/:toolCallId/deny` | Denies a pending manager tool call. |

@@ -1,6 +1,6 @@
 import { DiffBaseSchema, toPublicSession, toPublicSessionEvent, type SessionEvent } from "@helm/core";
 import { createDaemonToken } from "./auth";
-import { ArchiveSafetyError, SessionManager } from "./session-manager";
+import { ArchiveSafetyError, SessionManager, SessionOperationError } from "./session-manager";
 import { PullRequestPreconditionError } from "./workspace/types";
 
 const DEFAULT_PORT = 7878;
@@ -21,6 +21,9 @@ export function startServer(port = DEFAULT_PORT, token = createDaemonToken(), ma
         }
         if (error instanceof ArchiveSafetyError) {
           return json(request, { error: error.message, code: error.code, details: error.details }, 409);
+        }
+        if (error instanceof SessionOperationError) {
+          return json(request, { error: error.message, code: error.code, details: error.details }, error.status);
         }
         if (error instanceof PullRequestPreconditionError) {
           return json(request, { error: error.message, code: error.code, details: error.details }, 409);
@@ -119,6 +122,9 @@ async function route(request: Request, manager: SessionManager, token: string): 
     if (request.method === "POST" && parts[2] === "messages") {
       const body = (await request.json()) as { text: string };
       return json(request, toPublicSession(await manager.send(id, body.text)));
+    }
+    if (request.method === "POST" && parts[2] === "resume") {
+      return json(request, toPublicSession(await manager.resume(id)));
     }
     if (request.method === "PATCH" && parts[2] === "manager-mode") {
       const body = (await request.json()) as { manager_mode: "approval" | "autopilot" };

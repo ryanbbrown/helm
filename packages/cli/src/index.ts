@@ -6,6 +6,7 @@ import { createSession } from "./commands/session-create";
 import { listSessions } from "./commands/session-list";
 import { showSession } from "./commands/session-show";
 import { sendSession } from "./commands/session-send";
+import { resumeSession } from "./commands/session-resume";
 import { stopSession } from "./commands/session-stop";
 import { archiveSession } from "./commands/session-archive";
 import { daemonStatus, startDaemon, stopDaemon } from "./commands/daemon";
@@ -28,6 +29,7 @@ session
 session.command("list").option("--parent <id>").description("List sessions").action((options) => run(() => listSessions(options))());
 session.command("show").argument("<id>").description("Show a session").action((id) => run(() => showSession(id))());
 session.command("send").argument("<id>").argument("<text>").description("Send a follow-up").action((id, text) => run(() => sendSession(id, text))());
+session.command("resume").argument("<id>").description("Resume an interrupted session").action((id) => run(() => resumeSession(id))());
 session.command("stop").argument("<id>").description("Stop a session").action((id) => run(() => stopSession(id))());
 session.command("archive").argument("<id>").option("--force").description("Archive a session").action((id, options) => run(() => archiveSession(id, options))());
 

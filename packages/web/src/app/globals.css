@@ -222,6 +222,11 @@ textarea {
   color: var(--warn);
 }
 
+.badge.interrupted {
+  border-color: #c9a2d8;
+  color: #81509b;
+}
+
 .badge.failed {
   border-color: #e2a7a0;
   color: var(--danger);

@@ -38,6 +38,17 @@ CREATE TABLE IF NOT EXISTS session_events (
 
 CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id
   ON session_events(session_id, id);
+
+CREATE TABLE IF NOT EXISTS manager_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_manager_messages_session_id_id
+  ON manager_messages(session_id, id);
 `;
 
 const migrationTableSql = `
@@ -63,6 +74,10 @@ const migrations: Migration[] = [
       }
       db.exec("UPDATE sessions SET workspace_uri = 'file://' || worktree_path WHERE workspace_uri IS NULL AND worktree_path IS NOT NULL");
     }
+  },
+  {
+    version: 4,
+    apply: (db) => createManagerMessages(db)
   }
 ];
 
@@ -84,6 +99,22 @@ export function addColumnIfMissing(db: Database, table: string, column: string, 
   if (!hasColumn(db, table, column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+/** Creates the append-only manager message log. */
+function createManagerMessages(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS manager_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_manager_messages_session_id_id
+      ON manager_messages(session_id, id);
+  `);
 }
 
 /** Checks whether a sessions column still has a NOT NULL constraint. */

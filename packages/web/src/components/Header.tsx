@@ -1,17 +1,18 @@
-import { ExternalLink, GitCompare, RefreshCw, Square } from "lucide-react";
+import { ExternalLink, GitCompare, Play, RefreshCw, Square } from "lucide-react";
 import type { PublicSession } from "@helm/core";
 import { StatusBadge } from "./StatusBadge";
 
 type HeaderProps = {
   session: PublicSession | null;
   onRefresh: () => void;
+  onResume?: () => void;
   onStop: () => void;
   showDiff?: boolean;
   onToggleDiff?: () => void;
 };
 
 /** Renders the top bar for the active session. */
-export function Header({ session, onRefresh, onStop, showDiff = false, onToggleDiff }: HeaderProps) {
+export function Header({ session, onRefresh, onResume, onStop, showDiff = false, onToggleDiff }: HeaderProps) {
   return (
     <div className="header">
       <div>
@@ -32,10 +33,16 @@ export function Header({ session, onRefresh, onStop, showDiff = false, onToggleD
             {showDiff ? "Hide diff" : "Show diff"}
           </button>
         ) : null}
+        {session?.status === "interrupted" && onResume ? (
+          <button type="button" onClick={onResume}>
+            <Play size={15} />
+            Resume
+          </button>
+        ) : null}
         <button className="icon" type="button" title="Refresh" onClick={onRefresh}>
           <RefreshCw size={16} />
         </button>
-        <button className="icon" type="button" title="Stop" disabled={!session} onClick={onStop}>
+        <button className="icon" type="button" title="Stop" disabled={!session || session.status === "interrupted"} onClick={onStop}>
           <Square size={15} />
         </button>
       </div>

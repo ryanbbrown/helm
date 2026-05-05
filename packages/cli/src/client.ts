@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { tokenPath } from "@helm/core";
 import type { PublicSession, PublicSessionEvent } from "@helm/core";
 
-const DEFAULT_BASE_URL = `http://127.0.0.1:${Bun.env.HELM_PORT ?? "7878"}`;
+const DEFAULT_PORT = "7878";
 
 export type SessionDetail = {
   session: PublicSession;
@@ -11,7 +11,7 @@ export type SessionDetail = {
 
 export class DaemonClient {
   /** Creates a daemon HTTP client. */
-  constructor(private baseUrl = DEFAULT_BASE_URL) {}
+  constructor(private baseUrl = `http://127.0.0.1:${Bun.env.HELM_PORT ?? DEFAULT_PORT}`) {}
 
   /** Checks whether the daemon is reachable. */
   async isUp(): Promise<boolean> {
@@ -42,6 +42,11 @@ export class DaemonClient {
   /** Sends a follow-up through the daemon. */
   async send(id: string, text: string): Promise<PublicSession> {
     return this.request(`/sessions/${id}/messages`, { method: "POST", body: JSON.stringify({ text }) });
+  }
+
+  /** Resumes an interrupted daemon session. */
+  async resume(id: string): Promise<PublicSession> {
+    return this.request(`/sessions/${id}/resume`, { method: "POST" });
   }
 
   /** Stops a daemon session. */

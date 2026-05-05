@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
@@ -31,6 +31,165 @@ describe("SessionManager archive safety", () => {
     const archived = await fixture.manager.archive(fixture.sessionId, { force: true });
     expect(archived.status).toBe("archived");
     expect(await branchExists(fixture.repoPath, fixture.branch)).toBe(false);
+  });
+});
+
+describe("SessionManager resume", () => {
+  test("rehydrates interrupted Codex sessions without spawning until a send", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-resume-codex-"));
+    const worktreePath = join(dir, "worktree");
+    mkdirSync(worktreePath);
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+    store.insertSession({
+      id: "codex-session",
+      repo_name: "fixture",
+      agent_name: "codex",
+      branch: "helm/codex-session",
+      worktree_path: worktreePath,
+      status: "created",
+      created_at: now,
+      updated_at: now
+    });
+    store.updateSession("codex-session", { status: "interrupted", agent_thread_id: "thread-1", pid: null });
+    const manager = new SessionManager({
+      config: {
+        repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+        agents: [{ name: "codex", command: join(dir, "missing-codex"), args: [], headless_mode: "codex_exec" }]
+      },
+      store
+    });
+
+    const resumed = await manager.resume("codex-session");
+    const resumedAgain = await manager.resume("codex-session");
+
+    expect(resumed.status).toBe("awaiting_input");
+    expect(resumedAgain.status).toBe("awaiting_input");
+    expect(resumed.pid).toBeNull();
+    expect(manager.listEvents("codex-session").at(-1)?.kind).toBe("session_resumed");
+  });
+
+  test("rehydrates interrupted Claude sessions without spawning until a send", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-resume-claude-"));
+    const worktreePath = join(dir, "worktree");
+    mkdirSync(worktreePath);
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+    store.insertSession({
+      id: "claude-session",
+      repo_name: "fixture",
+      agent_name: "claude",
+      branch: "helm/claude-session",
+      worktree_path: worktreePath,
+      status: "created",
+      created_at: now,
+      updated_at: now
+    });
+    store.updateSession("claude-session", { status: "interrupted", agent_thread_id: "claude-thread-1", pid: null });
+    const manager = new SessionManager({
+      config: {
+        repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+        agents: [{ name: "claude", command: join(dir, "missing-claude"), args: [], headless_mode: "claude_stream_json" }]
+      },
+      store
+    });
+
+    const resumed = await manager.resume("claude-session");
+
+    expect(resumed.status).toBe("awaiting_input");
+    expect(resumed.pid).toBeNull();
+    expect(manager.listEvents("claude-session").at(-1)?.kind).toBe("session_resumed");
+  });
+
+  test("rehydrates interrupted manager sessions from stored messages", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-resume-manager-"));
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+    store.insertSession({
+      id: "manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "interrupted",
+      created_at: now,
+      updated_at: now
+    });
+    store.insertManagerMessage("manager", { role: "system", content: "system" });
+    const manager = new SessionManager({
+      config: {
+        repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+        agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" }]
+      },
+      store
+    });
+
+    const resumed = await manager.resume("manager");
+
+    expect(resumed.status).toBe("awaiting_input");
+    expect(resumed.pid).toBe(-1);
+    expect(manager.listEvents("manager").at(-1)?.kind).toBe("session_resumed");
+  });
+
+  test("serializes concurrent resume calls for one manager session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-resume-manager-concurrent-"));
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+    store.insertSession({
+      id: "manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "interrupted",
+      created_at: now,
+      updated_at: now
+    });
+    store.insertManagerMessage("manager", { role: "system", content: "system" });
+    const manager = new SessionManager({
+      config: {
+        repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+        agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" }]
+      },
+      store
+    });
+
+    const [first, second] = await Promise.all([manager.resume("manager"), manager.resume("manager")]);
+
+    expect(first.status).toBe("awaiting_input");
+    expect(second.status).toBe("awaiting_input");
+    expect(manager.listEvents("manager").filter((event) => event.kind === "session_resumed")).toHaveLength(1);
+  });
+
+  test("rejects interrupted manager sessions without a persisted transcript", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "helm-resume-missing-manager-"));
+    const store = new Store(join(dir, "helm.db"));
+    const now = new Date().toISOString();
+    store.insertSession({
+      id: "manager",
+      repo_name: "fixture",
+      agent_name: "manager",
+      branch: null,
+      worktree_path: null,
+      workspace_uri: null,
+      manager_mode: "approval",
+      status: "interrupted",
+      created_at: now,
+      updated_at: now
+    });
+    const manager = new SessionManager({
+      config: {
+        repos: [{ name: "fixture", path: dir, default_branch: "main" }],
+        agents: [{ name: "manager", command: "manager", args: [], headless_mode: "manager_loop", model: "test-model", api_key: "test-key" }]
+      },
+      store
+    });
+
+    await expect(manager.resume("manager")).rejects.toThrow("missing_manager_transcript");
   });
 });
 

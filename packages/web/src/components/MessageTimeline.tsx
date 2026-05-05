@@ -10,7 +10,7 @@ type MessageTimelineProps = {
 export function MessageTimeline({ events, onApproveToolCall, onDenyToolCall }: MessageTimelineProps) {
   const resolvedToolCalls = new Set(events.flatMap((event) => event.payload.kind === "tool_call_resolved" ? [event.payload.toolCallId] : []));
   const visible = events.filter((event) =>
-    ["session_started", "user_message", "thinking", "assistant_message", "tool_invocation", "tool_call_resolved", "tool_result", "child_event", "error", "exit"].includes(event.kind)
+    ["session_started", "session_resumed", "user_message", "thinking", "assistant_message", "tool_invocation", "tool_call_resolved", "tool_result", "child_event", "error", "exit"].includes(event.kind)
   );
   return (
     <div className="timeline">
@@ -29,6 +29,9 @@ export function MessageTimeline({ events, onApproveToolCall, onDenyToolCall }: M
         }
         if (event.kind === "session_started") {
           return <div className="event-line" key={event.id}>Session started.</div>;
+        }
+        if (event.kind === "session_resumed") {
+          return <div className="event-line" key={event.id}>Session resumed.</div>;
         }
         if (event.payload.kind === "tool_invocation") {
           const payload = event.payload;

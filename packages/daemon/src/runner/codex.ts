@@ -9,17 +9,19 @@ export class CodexRunnerAdapter implements RunnerAdapter {
   spawn(opts: RunnerSpawnOptions): RunnerHandle {
     const queue = new AsyncQueue<NormalizedEvent>();
     const handle = new CodexRunnerHandle(queue, opts);
-    handle.spawnTurn(opts.initialPrompt ?? "", opts.resumeThreadId);
+    if (!opts.resumeThreadId || opts.initialPrompt) {
+      handle.spawnTurn(opts.initialPrompt ?? "", opts.resumeThreadId);
+    }
     return handle;
   }
 }
 
 class CodexRunnerHandle implements RunnerHandle {
   events: AsyncIterable<NormalizedEvent>;
-  pid = 0;
+  pid: number | null = null;
   private proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
+  private pendingFollowUps: string[] = [];
   private threadId: string | undefined;
-  private pendingFollowUp: string | null = null;
 
   /** Creates a Codex runner handle. */
   constructor(
@@ -46,6 +48,9 @@ class CodexRunnerHandle implements RunnerHandle {
     void readJsonLines(this.proc.stdout, this.opts.logPath, (value) => this.handleEvent(value)).catch((error) => this.queue.push(normalizeError(error)));
     void this.proc.exited.then((code) => {
       this.queue.push({ kind: "exit", code });
+      if (code === 0) {
+        this.drainPendingFollowUps();
+      }
     });
   }
 
@@ -53,7 +58,7 @@ class CodexRunnerHandle implements RunnerHandle {
   async send(userText: string): Promise<void> {
     const threadId = this.threadId ?? this.opts.resumeThreadId;
     if (!threadId) {
-      this.pendingFollowUp = userText;
+      this.pendingFollowUps.push(userText);
       return;
     }
     this.spawnTurn(userText, threadId);
@@ -72,11 +77,6 @@ class CodexRunnerHandle implements RunnerHandle {
     if (event.type === "thread.started" && threadId) {
       this.threadId = threadId;
       this.opts.onThreadId?.(threadId);
-      if (this.pendingFollowUp) {
-        const text = this.pendingFollowUp;
-        this.pendingFollowUp = null;
-        this.spawnTurn(text, threadId);
-      }
       return;
     }
     if (event.type === "turn.started") {
@@ -97,5 +97,15 @@ class CodexRunnerHandle implements RunnerHandle {
     if (event.type === "turn.failed" || event.type === "error") {
       this.queue.push({ kind: "error", message: event.type, payload: value });
     }
+  }
+
+  /** Starts queued follow-ups once Codex has emitted a resumable thread id. */
+  private drainPendingFollowUps(): void {
+    const threadId = this.threadId ?? this.opts.resumeThreadId;
+    const userText = this.pendingFollowUps.shift();
+    if (!threadId || !userText) {
+      return;
+    }
+    this.spawnTurn(userText, threadId);
   }
 }
