@@ -84,7 +84,10 @@ function createCommandFixture(name: string, body: string[]): CommandFixture {
 async function readCapturedArgs(capturePath: string): Promise<string[]> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (existsSync(capturePath)) {
-      return readFileSync(capturePath, "utf8").trim().split("\n").filter((line) => line && line !== "---");
+      const content = readFileSync(capturePath, "utf8");
+      if (content.includes("---")) {
+        return content.trim().split("\n").filter((line) => line && line !== "---");
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

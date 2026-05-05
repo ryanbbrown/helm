@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { PublicNormalizedEvent, PublicSession, PublicSessionEvent } from "@helm/core";
-import { e2eAuthHeaders, readE2eToken } from "./auth";
+import { e2eAuthHeaders, e2eDashboardUrl } from "./auth";
 
 const cases = [
   { repo: "test-repo-1", agent: "codex" },
@@ -29,7 +29,7 @@ for (const entry of cases) {
     });
 
     try {
-      await page.goto(`/?token=${await readE2eToken()}`);
+      await page.goto(await e2eDashboardUrl());
       await page.locator('select[name="repo"]').selectOption(entry.repo);
       await page.locator('select[name="agent"]').selectOption(entry.agent);
       await page.locator('textarea[name="prompt"]').fill(initialPrompt);

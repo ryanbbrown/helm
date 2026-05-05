@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { readE2eToken } from "./auth";
+import { e2eDashboardUrl } from "./auth";
 
 test("dashboard loads configured repos and agents without browser errors", async ({ page }) => {
   const messages: string[] = [];
@@ -11,7 +11,7 @@ test("dashboard loads configured repos and agents without browser errors", async
   });
   page.on("pageerror", (error) => messages.push(error.message));
 
-  await page.goto(`/?token=${await readE2eToken()}`);
+  await page.goto(await e2eDashboardUrl());
 
   await expect(page.locator('select[name="repo"]')).toContainText("test-repo-1");
   await expect(page.locator('select[name="repo"]')).toContainText("test-repo-2");
@@ -26,7 +26,7 @@ test("dashboard loads configured repos and agents without browser errors", async
 
 test("dashboard renders manager tool calls and child lifecycle rows", async ({ page }) => {
   seedManagerTimeline();
-  await page.goto(`/?token=${await readE2eToken()}`);
+  await page.goto(await e2eDashboardUrl());
 
   await page.getByRole("button", { name: /manager\s+awaiting input/i }).click();
 
