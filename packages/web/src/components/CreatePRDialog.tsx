@@ -1,9 +1,12 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import type { PublicSession, PublicSessionEvent } from "@helm/core";
 import { ApiError, createPullRequest } from "../lib/api";
+import { isEditableTarget } from "../lib/shortcuts";
+import { Button } from "./ui/Button";
+import { Textarea } from "./ui/Textarea";
 
 type CreatePRDialogProps = {
   session: PublicSession;
@@ -19,6 +22,18 @@ export function CreatePRDialog({ session, events, onClose, onCreated }: CreatePR
   const [body, setBody] = useState(`Created from Helm session ${session.id}.`);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    /** Closes the PR dialog when Escape is pressed outside editable controls. */
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape" && !isEditableTarget(event.target)) {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   /** Submits the pull request request to the daemon. */
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -46,15 +61,15 @@ export function CreatePRDialog({ session, events, onClose, onCreated }: CreatePR
         </label>
         <label>
           <span>Body</span>
-          <textarea value={body} onChange={(event) => setBody(event.target.value)} />
+          <Textarea value={body} onChange={(event) => setBody(event.target.value)} />
         </label>
         {error ? <div className="error-line">{error}</div> : null}
         <div className="modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={submitting || !title.trim()}>
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting || !title.trim()}>
             <ExternalLink size={15} />
             {submitting ? "Creating" : "Create PR"}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

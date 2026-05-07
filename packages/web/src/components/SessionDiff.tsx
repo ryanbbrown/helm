@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DiffBase, DiffFileEntry, DiffResult, PublicSession, PublicSessionEvent } from "@helm/core";
 import { ApiError, getSessionDiff } from "../lib/api";
 import { CreatePRDialog } from "./CreatePRDialog";
+import { Button } from "./ui/Button";
+import { IconButton } from "./ui/IconButton";
 
 const LazyPatchDiff = dynamic(() => import("./SessionPatchDiff").then((mod) => mod.SessionPatchDiff), {
   ssr: false,
@@ -119,19 +121,19 @@ export function SessionDiff({ session, events, diffRefreshToken, onSessionUpdate
             <button className={base === "branch" ? "active" : ""} type="button" onClick={() => setBase("branch")}>Branch</button>
             <button className={base === "uncommitted" ? "active" : ""} type="button" onClick={() => setBase("uncommitted")}>Uncommitted</button>
           </div>
-          <button className="icon" type="button" title="Refresh diff" onClick={() => void refresh()}>
+          <IconButton label="Refresh diff" onClick={() => void refresh()}>
             <RefreshCw size={15} />
-          </button>
+          </IconButton>
           {session.pull_request_url ? (
             <a className="button-link" href={session.pull_request_url} rel="noreferrer" target="_blank">
               <ExternalLink size={15} />
               View PR
             </a>
           ) : (
-            <button type="button" disabled={session.status === "running"} onClick={() => setShowPrDialog(true)}>
+            <Button type="button" disabled={session.status === "running"} onClick={() => setShowPrDialog(true)}>
               <GitCompare size={15} />
               Create PR
-            </button>
+            </Button>
           )}
         </div>
       </div>

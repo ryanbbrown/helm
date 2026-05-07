@@ -538,7 +538,33 @@ CORS responses echo only the matching allowed origin — never `*`.
 
 The allowlist is defense-in-depth; the token is the actual auth boundary.
 
-## 13. Out of Scope (MVP)
+## 13. Dashboard UX Contract
+
+The browser dashboard is an operational control surface for many local sessions, not a marketing page. It must keep creation, session selection, chat follow-up, diff review, resume, and lifecycle controls reachable through visible controls and keyboard-only operation.
+
+Required keyboard behavior:
+
+- `Enter` submits the active composer when it has non-empty text.
+- `Shift+Enter` inserts a newline in composer text.
+- `Cmd+Enter` and `Ctrl+Enter` submit the active composer from any line.
+- `Escape` clears draft composer text; outside editable fields it clears transient sidebar search or closes transient dialogs.
+- `/` focuses session search when focus is not already in an editable control.
+- `n` focuses the new-session composer.
+- `j` / `k` and `ArrowDown` / `ArrowUp` move the selected session when focus is not in an editable control.
+- `r` refreshes the dashboard view for the selected session.
+- `d` toggles the selected non-manager session's diff view.
+
+Required interface behavior:
+
+- New-session and follow-up prompts use the same autosizing composer pattern and real form submission path.
+- Send failures preserve draft text and show the error next to the composer that caused it.
+- Interrupted sessions show an explicit resume control, do not accept follow-up messages until resumed, and cannot be stopped again from the dashboard.
+- Session rows expose selected state via `aria-current`.
+- Destructive worktree removal remains explicit. Archive safety failures must show a custom confirmation dialog with daemon-provided details before a force archive.
+- The timeline renders only surfaced normalized events and distinguishes chat messages, compact lifecycle rows, tool calls, and errors.
+- The dashboard remains usable below 760 px width without hiding the active composer or overlapping primary controls.
+
+## 14. Out of Scope (MVP)
 
 - Remote / cloud execution targets.
 - Direct GitHub API automation, including issue linking. PR creation is supported only through the local `gh` CLI.
@@ -549,7 +575,7 @@ The allowlist is defense-in-depth; the token is the actual auth boundary.
 - Tmux-based session durability (deferred; agents die with the owning Helm process).
 - `helm session attach` — depended on tmux; not in MVP.
 
-## 14. Open Questions
+## 15. Open Questions
 
 - Worktree retention policy: auto-archive `stopped` or `completed` sessions after N days?
 - Branch push policy on `archive` — push `helm/<id>` to origin first, or just delete locally?

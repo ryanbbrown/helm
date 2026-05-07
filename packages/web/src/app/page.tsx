@@ -1,8 +1,7 @@
 "use client";
 
-import { Archive, Play } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { PublicSession, PublicSessionEvent } from "@helm/core";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import type { PublicSession, PublicSessionEvent, SessionStatus } from "@helm/core";
 import {
   ApiError,
   approveToolCall,
@@ -19,10 +18,19 @@ import {
   type HelmConfig
 } from "../lib/api";
 import { useAllSessionsStream, useSessionEvents } from "../lib/sse";
+import { useGlobalShortcuts, type ShortcutBinding } from "../lib/shortcuts";
+import { ArchiveConfirmDialog } from "../components/ArchiveConfirmDialog";
+import { DashboardShell } from "../components/DashboardShell";
 import { EmptyState } from "../components/EmptyState";
 import { Header } from "../components/Header";
+import { InlineNotice } from "../components/InlineNotice";
 import { SessionDetail } from "../components/SessionDetail";
-import { SessionList } from "../components/SessionList";
+import { Sidebar } from "../components/Sidebar";
+
+type ArchiveConflict = {
+  sessionId: string;
+  details: string;
+};
 
 /** Renders the Helm dashboard. */
 export default function Page() {
@@ -34,10 +42,22 @@ export default function Page() {
   const [repoName, setRepoName] = useState("");
   const [agentName, setAgentName] = useState("");
   const [managerMode, setManagerMode] = useState<"approval" | "autopilot">("approval");
-  const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<SessionStatus | "all">("all");
+  const [showDiff, setShowDiff] = useState(false);
   const [diffRefreshToken, setDiffRefreshToken] = useState(0);
   const [starting, setStarting] = useState(false);
+  const [archiveConflict, setArchiveConflict] = useState<ArchiveConflict | null>(null);
+  const [forceArchiving, setForceArchiving] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const newComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const selected = useMemo(() => sessions.find((session) => session.id === selectedId) ?? null, [selectedId, sessions]);
+  const statusOptions = useMemo(() => uniqueStatuses(sessions), [sessions]);
+  const visibleSessions = useMemo(
+    () => sessions.filter((session) => matchesSearch(session, search) && (statusFilter === "all" || session.status === statusFilter)),
+    [search, sessions, statusFilter]
+  );
 
   const mergeSession = useCallback((session: PublicSession) => {
     setSessions((current) => {
@@ -54,27 +74,28 @@ export default function Page() {
       return [...current, event].sort((a, b) => a.id - b.id);
     });
   }, []);
-  const ignoreGlobalEvent = useCallback(() => undefined, []);
-  const markDiffChanged = useCallback(() => setDiffRefreshToken((current) => current + 1), []);
 
   const refresh = useCallback(async () => {
     try {
-      const next = await listSessions();
-      const config = await getConfig();
+      const activeId = selectedId;
+      const [next, config, detail] = await Promise.all([
+        listSessions(),
+        getConfig(),
+        activeId ? getSession(activeId) : Promise.resolve(null)
+      ]);
       setSessions(next);
       setRepos(config.repos);
       setAgents(config.agents);
       setRepoName((current) => current || config.repos[0]?.name || "");
       setAgentName((current) => current || config.agents.find((agent) => agent.name === "codex")?.name || config.agents[0]?.name || "");
       setSelectedId((current) => current ?? next[0]?.id ?? null);
-      if (selectedId) {
-        const detail = await getSession(selectedId);
+      if (detail) {
         mergeSession(detail.session);
         setEvents(detail.events);
       }
-      setError(null);
+      setPageError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setPageError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [mergeSession, selectedId]);
 
@@ -83,6 +104,7 @@ export default function Page() {
   }, [refresh]);
 
   useEffect(() => {
+    setShowDiff(false);
     if (!selectedId) {
       setEvents([]);
       return;
@@ -92,20 +114,45 @@ export default function Page() {
         mergeSession(detail.session);
         setEvents(detail.events);
       })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+      .catch((cause) => setPageError(cause instanceof Error ? cause.message : String(cause)));
   }, [mergeSession, selectedId]);
 
+  const ignoreGlobalEvent = useCallback(() => undefined, []);
+  const markDiffChanged = useCallback(() => setDiffRefreshToken((current) => current + 1), []);
   useAllSessionsStream(mergeSession, ignoreGlobalEvent);
   useSessionEvents(selectedId, mergeSession, mergeEvent, markDiffChanged);
 
-  /** Creates a new session from form data. */
-  async function onCreate(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+  const selectOffset = useCallback((offset: number) => {
+    if (visibleSessions.length === 0) {
+      return;
+    }
+    const index = visibleSessions.findIndex((session) => session.id === selectedId);
+    if (index === -1) {
+      setSelectedId(offset >= 0 ? visibleSessions[0].id : visibleSessions[visibleSessions.length - 1].id);
+      return;
+    }
+    const next = visibleSessions[(index + offset + visibleSessions.length) % visibleSessions.length];
+    setSelectedId(next.id);
+  }, [selectedId, visibleSessions]);
+
+  const shortcuts = useMemo<ShortcutBinding[]>(() => archiveConflict ? [] : [
+    { key: "/", run: () => searchRef.current?.focus() },
+    { key: "n", run: () => newComposerRef.current?.focus() },
+    { key: "j", run: () => selectOffset(1) },
+    { key: "k", run: () => selectOffset(-1) },
+    { key: "ArrowDown", run: () => selectOffset(1) },
+    { key: "ArrowUp", run: () => selectOffset(-1) },
+    { key: "r", run: () => void refresh() },
+    { key: "d", run: () => selected && !selected.manager_mode ? setShowDiff((current) => !current) : undefined },
+    { key: "Escape", run: () => setSearch("") }
+  ], [archiveConflict, refresh, selectOffset, selected]);
+  useGlobalShortcuts(shortcuts);
+
+  /** Creates a new session from the initial prompt. */
+  async function onCreate(prompt: string): Promise<void> {
     const repo = repoName.trim();
     const agent = agentName.trim();
-    const prompt = String(formData.get("prompt") ?? "").trim();
-    if (!repo || !agent || !prompt) {
+    if (!repo || !agent || !prompt.trim()) {
       return;
     }
     setStarting(true);
@@ -116,9 +163,7 @@ export default function Page() {
         : await createSession(repo, agent, prompt);
       mergeSession(session);
       setSelectedId(session.id);
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setPageError(null);
     } finally {
       setStarting(false);
     }
@@ -138,20 +183,30 @@ export default function Page() {
     if (!selectedId) {
       return;
     }
-    const session = await resumeSession(selectedId);
-    mergeSession(session);
+    try {
+      const session = await resumeSession(selectedId);
+      mergeSession(session);
+      setPageError(null);
+    } catch (cause) {
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   /** Stops the selected session. */
   async function onStop(): Promise<void> {
-    if (!selectedId) {
+    if (!selectedId || selected?.status === "interrupted") {
       return;
     }
-    const session = await stopSession(selectedId);
-    mergeSession(session);
+    try {
+      const session = await stopSession(selectedId);
+      mergeSession(session);
+      setPageError(null);
+    } catch (cause) {
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
-  /** Archives the selected session. */
+  /** Archives the selected session or opens the safety dialog. */
   async function onArchive(): Promise<void> {
     if (!selectedId) {
       return;
@@ -159,13 +214,30 @@ export default function Page() {
     try {
       const session = await archiveSession(selectedId);
       mergeSession(session);
+      setArchiveConflict(null);
     } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 409 && window.confirm(`Archive would discard work:\n\n${cause.details}\n\nForce archive?`)) {
-        const session = await archiveSession(selectedId, true);
-        mergeSession(session);
+      if (cause instanceof ApiError && cause.status === 409) {
+        setArchiveConflict({ sessionId: selectedId, details: cause.details ?? cause.message });
         return;
       }
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  /** Force archives after the user confirms unsafe removal. */
+  async function onForceArchive(): Promise<void> {
+    if (!archiveConflict) {
+      return;
+    }
+    setForceArchiving(true);
+    try {
+      const session = await archiveSession(archiveConflict.sessionId, true);
+      mergeSession(session);
+      setArchiveConflict(null);
+    } catch (cause) {
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setForceArchiving(false);
     }
   }
 
@@ -174,7 +246,12 @@ export default function Page() {
     if (!selectedId) {
       return;
     }
-    await approveToolCall(selectedId, toolCallId);
+    try {
+      await approveToolCall(selectedId, toolCallId);
+      setPageError(null);
+    } catch (cause) {
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   /** Denies a pending manager tool call. */
@@ -182,70 +259,84 @@ export default function Page() {
     if (!selectedId) {
       return;
     }
-    await denyToolCall(selectedId, toolCallId);
+    try {
+      await denyToolCall(selectedId, toolCallId);
+      setPageError(null);
+    } catch (cause) {
+      setPageError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   return (
-    <main className="app">
-      <aside className="sidebar">
-        <div className="header">
-          <div>
-            <div className="title">Helm</div>
-            <div className="muted">Local sessions</div>
-          </div>
-          <button className="icon" type="button" title="Archive selected session" disabled={!selectedId} onClick={onArchive}>
-            <Archive size={16} />
-          </button>
-        </div>
-        <form className="new-session" onSubmit={(event) => void onCreate(event)}>
-          <select name="repo" value={repoName} onChange={(event) => setRepoName(event.target.value)}>
-            {repos.length === 0 ? <option value="">No repos configured</option> : null}
-            {repos.map((repo) => (
-              <option key={repo.name} value={repo.name}>{repo.name}</option>
-            ))}
-          </select>
-          <select name="agent" value={agentName} onChange={(event) => setAgentName(event.target.value)}>
-            {agents.length === 0 ? <option value="">No agents configured</option> : null}
-            {agents.map((agent) => (
-              <option key={agent.name} value={agent.name}>{agent.name}</option>
-            ))}
-          </select>
-          {agents.find((agent) => agent.name === agentName)?.headless_mode === "manager_loop" ? (
-            <select name="manager_mode" value={managerMode} onChange={(event) => setManagerMode(event.target.value as "approval" | "autopilot")}>
-              <option value="approval">Approval</option>
-              <option value="autopilot">Autopilot</option>
-            </select>
-          ) : null}
-          <textarea name="prompt" placeholder="Initial prompt" />
-          <button className="primary" type="submit" disabled={starting || !repoName || !agentName}>
-            <Play size={15} />
-            {starting ? "Starting" : "Start"}
-          </button>
-          {error ? <div className="event-line">Error: {error}</div> : null}
-        </form>
-        <SessionList sessions={sessions} selectedId={selectedId} onSelect={setSelectedId} />
-      </aside>
-      <section className="main">
-        {selected ? (
-          <SessionDetail
-            session={selected}
-            events={events}
-            diffRefreshToken={diffRefreshToken}
-            onRefresh={refresh}
-            onResume={() => void onResume()}
-            onSend={onSend}
-            onStop={() => void onStop()}
-            onSessionUpdate={mergeSession}
-            onApproveToolCall={(toolCallId) => void onApproveToolCall(toolCallId)}
-            onDenyToolCall={(toolCallId) => void onDenyToolCall(toolCallId)}
+    <>
+      <DashboardShell
+        sidebar={
+          <Sidebar
+            sessions={visibleSessions}
+            selectedId={selectedId}
+            repos={repos}
+            agents={agents}
+            statusOptions={statusOptions}
+            repoName={repoName}
+            agentName={agentName}
+            managerMode={managerMode}
+            starting={starting}
+            search={search}
+            statusFilter={statusFilter}
+            searchRef={searchRef}
+            composerRef={newComposerRef}
+            onSearchChange={setSearch}
+            onStatusFilterChange={setStatusFilter}
+            onRepoChange={setRepoName}
+            onAgentChange={setAgentName}
+            onManagerModeChange={setManagerMode}
+            onCreate={onCreate}
+            onSelect={setSelectedId}
           />
-        ) : (
-          <>
-            <Header session={null} onRefresh={refresh} onStop={() => undefined} />
-            <EmptyState />
-          </>
-        )}
-      </section>
-    </main>
+        }
+        detail={
+          selected ? (
+            <SessionDetail
+              session={selected}
+              events={events}
+              diffRefreshToken={diffRefreshToken}
+              showDiff={showDiff}
+              onRefresh={refresh}
+              onResume={() => void onResume()}
+              onSend={onSend}
+              onStop={() => void onStop()}
+              onArchive={() => void onArchive()}
+              onToggleDiff={() => setShowDiff((current) => !current)}
+              onSessionUpdate={mergeSession}
+              onApproveToolCall={(toolCallId) => void onApproveToolCall(toolCallId)}
+              onDenyToolCall={(toolCallId) => void onDenyToolCall(toolCallId)}
+            />
+          ) : (
+            <div className="detail">
+              <Header session={null} onRefresh={refresh} onStop={() => undefined} />
+              <EmptyState />
+            </div>
+          )
+        }
+      />
+      {pageError ? <div className="toast-region"><InlineNotice tone="error">{pageError}</InlineNotice></div> : null}
+      {archiveConflict ? <ArchiveConfirmDialog details={archiveConflict.details} archiving={forceArchiving} onCancel={() => setArchiveConflict(null)} onConfirm={() => void onForceArchive()} /> : null}
+    </>
   );
+}
+
+/** Returns statuses present in the current session set. */
+function uniqueStatuses(sessions: PublicSession[]): SessionStatus[] {
+  return Array.from(new Set(sessions.map((session) => session.status)));
+}
+
+/** Checks whether a session matches the sidebar search query. */
+function matchesSearch(session: PublicSession, search: string): boolean {
+  const query = search.trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  return [session.repo_name, session.agent_name, session.branch, session.status, session.manager_mode ?? ""]
+    .filter(Boolean)
+    .some((value) => value?.toLowerCase().includes(query));
 }

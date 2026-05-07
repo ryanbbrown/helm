@@ -1,11 +1,13 @@
 import { Database } from "bun:sqlite";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { applyMigrations } from "../../packages/daemon/src/migrations";
 
 const dbPath = process.env.HELM_E2E_DB_PATH ?? join(process.cwd(), "tests/fixtures/helm-home/state/helm.db");
 
 /** Seeds deterministic manager timeline rows for dashboard e2e assertions. */
 function seedManagerTimeline(): void {
+  mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   applyMigrations(db);
   const now = {

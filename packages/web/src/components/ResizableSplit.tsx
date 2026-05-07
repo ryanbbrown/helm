@@ -55,6 +55,9 @@ export function ResizableSplit({ storageKey, left, right }: ResizableSplitProps)
       <div className="split-pane">{left}</div>
       <div
         aria-label="Resize diff panel"
+        aria-valuemax={MAX_RIGHT_WIDTH}
+        aria-valuemin={MIN_RIGHT_WIDTH}
+        aria-valuenow={rightWidth}
         className="split-divider"
         role="separator"
         tabIndex={0}
